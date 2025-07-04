@@ -22,7 +22,7 @@ SUPPORT_EMAIL = "support@turbo.com"
 WEBSITE = "https://turbo.com" 
 TELEGRAM = "@turbo"
 
-# --- Turbo Branding Colors (Updated Palette) ---
+# --- Turbo Branding Colors (Updated Palette) -------------------------------------------------------------
 TURBO_BLACK = "#0A1026"         # Main background
 TURBO_SIDEBAR = "#10182A"      # Sidebar background
 TURBO_WHITE = "#FFFFFF"         # Main text
