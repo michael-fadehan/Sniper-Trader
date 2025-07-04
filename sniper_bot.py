@@ -14,6 +14,7 @@ import websockets # For websockets
 import sniper_trading
 import ssl
 import certifi
+import traceback
 
 # --- Wallet/Seed Phrase Imports ---
 import base58
@@ -21,7 +22,7 @@ from mnemonic import Mnemonic
 from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 
 # Solders/Solana-Py imports
-from solders.transaction import VersionedTransaction
+from solders.transaction import VersionedTransaction, Transaction
 from solders.message import MessageV0
 from solders.hash import Hash
 from solders.keypair import Keypair
@@ -51,7 +52,7 @@ SIMULATION_MODE = True
 WALLET_TYPE = "private"
 SEED_PHRASE = ""
 PRIVATE_KEY = ""
-RPC_URL = "https://api.mainnet-beta.solana.com" # Should be a WebSocket-compatible URL for sniping
+RPC_URL = "https://mainnet.helius-rpc.com/?api-key=3be2d48e-7192-43bf-8323-b80943ab0f1a" # Forced Helius endpoint
 STARTING_USD = 100.0
 POSITION_SIZE_USD = 20.0
 BUY_FEE = 0.005
@@ -128,7 +129,7 @@ class SniperSession:
         self.seen_tokens = set()
         self.trades = []
         self.SIMULATION_MODE = kwargs.get("simulation", SIMULATION_MODE)
-        self.RPC_URL = kwargs.get("rpc_url", RPC_URL)
+        self.RPC_URL = kwargs.get("rpc_url", RPC_URL)  # Force Helius endpoint
         self.STARTING_USD = STARTING_USD
         self.SIMULATION_DURATION = kwargs.get("duration", SIMULATION_DURATION)
         if self.SIMULATION_DURATION < 100000:
@@ -225,6 +226,7 @@ class SniperSession:
 
         self.execute_buy_token = sniper_trading.execute_buy_token.__get__(self)
         self.execute_sell_token = sniper_trading.execute_sell_token.__get__(self)
+        self.try_sell = sniper_trading.SniperSession.try_sell.__get__(self)
 
         self.buy_lock = threading.Lock()
         if not hasattr(self, 'sol_balance') or self.sol_balance is None:
@@ -513,7 +515,14 @@ class SniperSession:
             self.log("❌ Failed to fetch SOL price. Please check your internet connection or API limits.")
             self.update_status("Error")
             return
-        self.sol_balance = self.get_wallet_balance()
+        if self.SIMULATION_MODE:
+            self.sol_balance = 100.0 / self.sol_usd
+            # Create a simulation keypair
+            self.keypair = Keypair()
+            self.wallet_address = str(self.keypair.pubkey())
+            self.log(f"[DEBUG] Created simulation keypair with address: {self.wallet_address}")
+        else:
+            self.sol_balance = self.get_wallet_balance()
         if self.sol_balance is None or self.sol_balance == 0:
             self.log("❌ Failed to fetch wallet balance. Please check your wallet settings.")
             self.update_status("Error")
@@ -768,56 +777,101 @@ class SniperSession:
         return get_associated_token_address(owner, mint)
 
     async def _check_and_create_ata(self, owner: PublicKey, mint: PublicKey) -> Optional[PublicKey]:
-        """
-        Checks if an Associated Token Account (ATA) exists for the given owner and mint.
-        If it doesn't exist, it creates it and waits for confirmation.
-        Returns the ATA public key if successful, None otherwise.
-        """
-        ata_address = self._get_associated_token_account(owner, mint)
+        """Check if ATA exists for owner/mint pair, create if not."""
         try:
-            account_info = self.client.get_account_info(ata_address, commitment='confirmed')
-            if account_info.value is None:
-                self.log(f"ATA for {mint} does not exist for {owner}. Creating it…")
-
-                try:
-                    from solana.transaction import Transaction  # Local import to avoid top-level dependency if unused elsewhere
-                except ImportError as e:
-                    self.log(f"❌ Error: solana.transaction module not found. Please install the solana package.")
-                    return None
+            ata = get_associated_token_address(owner, mint)
+            self.log(f"[DEBUG] Checking ATA for {mint}")
+            
+            try:
+                account_info = self.client.get_account_info(ata)
+                if account_info and account_info.value:
+                    self.log(f"[DEBUG] ATA exists for {mint}")
+                    return ata
+            except Exception as e:
+                self.log(f"[DEBUG] ATA does not exist for {mint}, creating... (Error: {e})")
+            
+            self.log(f"[DEBUG] Creating new ATA for {mint}")
+            self.log(f"[DEBUG] Owner: {owner}")
+            self.log(f"[DEBUG] Mint: {mint}")
+                
+            # Create ATA instruction
+            try:
                 create_ata_ix = create_associated_token_account(
                     payer=owner,
                     owner=owner,
-                    mint=mint,
+                    mint=mint
                 )
-                txn = Transaction()
-                txn.add(create_ata_ix)
-
-                # `send_transaction` will sign with the provided keypair automatically for legacy transactions
-                resp = self.client.send_transaction(
-                    txn,
-                    self.keypair,
-                    opts=TxOpts(skip_preflight=False, preflight_commitment='confirmed'),
-                )
-                sig = getattr(resp, "value", None) or resp.get("result")
-                if not sig:
-                    self.log(f"❌ Failed to send ATA creation tx: {resp}")
-                    return None
-
-                # Wait for confirmation (simple loop to avoid needing websocket)
-                max_retry = 20
-                for i in range(max_retry):
-                    status = self.client.get_signature_statuses([sig]).value[0]
-                    if status and status.confirmations is not None and status.err is None:
-                        self.log(f"✅ ATA created for {mint}: {ata_address}")
-                        return ata_address
-                    await asyncio.sleep(1)
-                self.log(f"❌ ATA creation tx {sig} not confirmed in time")
+                self.log(f"[DEBUG] ATA instruction created successfully")
+            except Exception as e:
+                self.log(f"[ERROR] Failed to create ATA instruction: {e}")
                 return None
-            else:
-                self.log(f"ATA for {mint} already exists: {ata_address}")
-                return ata_address
+            
+            # Create and send transaction
+            try:
+                # Retry mechanism for blockhash and transaction send
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    try:
+                        recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
+                        self.log(f"[DEBUG] Got recent blockhash (attempt {attempt+1}): {recent_blockhash}")
+                        # Create a versioned transaction directly
+                        instructions = [create_ata_ix]
+                        message = MessageV0.try_compile(
+                    payer=owner,
+                            instructions=instructions,
+                    address_lookup_table_accounts=[],
+                            recent_blockhash=recent_blockhash
+                        )
+                        self.log(f"[DEBUG] Message compiled successfully (attempt {attempt+1})")
+                        # Create transaction
+                        transaction = VersionedTransaction(message, [self.keypair])
+                        self.log(f"[DEBUG] Transaction created (attempt {attempt+1})")
+                        # Handle both wallet types
+                        if hasattr(self.client, 'sign_transaction'):
+                            # Trojan wallet
+                            self.log("[DEBUG] Using Trojan wallet signing for ATA creation")
+                            transaction = self.client.sign_transaction(transaction)
+                            tx_bytes = transaction.serialize()
+                            self.log(f"[DEBUG] Transaction signed by Trojan wallet")
+                        else:
+                            # Conventional wallet
+                            self.log("[DEBUG] Using conventional wallet signing for ATA creation")
+                            self.log(f"[DEBUG] Keypair type: {type(self.keypair)}")
+                            self.log(f"[DEBUG] Keypair pubkey: {self.keypair.pubkey() if hasattr(self.keypair, 'pubkey') else 'N/A'}")
+                            tx_bytes = bytes(transaction)
+                            self.log(f"[DEBUG] Transaction signed by conventional wallet")
+                        # Send without opts parameter
+                        self.log(f"[DEBUG] Sending ATA creation transaction for {mint} (attempt {attempt+1})")
+                        resp = self.client.send_raw_transaction(tx_bytes)
+                        self.log(f"[DEBUG] send_raw_transaction response: {resp}")
+                        if not resp or not hasattr(resp, 'value') or 'BlockhashNotFound' in str(resp):
+                            self.log(f"❌ Failed to send ATA creation transaction (blockhash issue): {resp}")
+                            time.sleep(1)
+                            continue
+                        signature = resp.value
+                        self.log(f"[DEBUG] ATA creation transaction sent with signature: {signature}")
+                        # Confirm transaction
+                        conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                        self.log(f"[DEBUG] Confirmation response: {conf}")
+                        if conf and conf.value:
+                            self.log(f"✅ Successfully created ATA {ata}")
+                            return ata
+                        else:
+                            self.log(f"❌ ATA creation transaction failed to confirm (attempt {attempt+1})")
+                            time.sleep(1)
+                            continue
+                    except Exception as e:
+                        self.log(f"[ERROR] Failed during transaction creation/sending (attempt {attempt+1}): {e}\n{traceback.format_exc()}")
+                        time.sleep(1)
+                        continue
+                self.log(f"❌ All attempts to create ATA failed for {mint}")
+                return None
+            except Exception as e:
+                self.log(f"[ERROR] Failed during transaction creation/sending: {e}\n{traceback.format_exc()}")
+                return None
+                
         except Exception as e:
-            self.log(f"❌ Error checking/creating ATA for {mint}: {e}")
+            self.log(f"❌ Error checking/creating ATA for {mint}: {e}\n{traceback.format_exc()}")
             return None
 
     def _get_raydium_pool_keys(self, token_mint_address: str, pool_info: Dict[str, Any]) -> Optional[Dict[str, PublicKey]]:
@@ -1083,14 +1137,29 @@ class SniperSession:
         try:
             # Use send_transaction for better reliability in live execution
             if self.keypair is not None:
-                result = self.client.send_transaction(transaction, [self.keypair], TxOpts(skip_preflight=False, preflight_commitment='confirmed'))
+                self.log(f"DEBUG: Sending direct swap transaction...")
+                
+                # Convert to raw bytes for sending
+                raw_tx = bytes(transaction)
+                
+                # Send without opts parameter
+                result = self.client.send_raw_transaction(raw_tx)
+                
                 self.log(f"Transaction result: {result}")
-                if result.value.err:
-                    self.log(f"❌ Direct swap failed: Transaction error: {result.value.err}")
+                if not result.value:
+                    self.log(f"❌ Direct swap failed: Transaction error")
                     return False
                 else:
-                    self.log(f"✅ Direct swap transaction confirmed: {result.value.tx_signature}")
-                    return True
+                    signature = result.value
+                    self.log(f"Transaction sent with signature: {signature}")
+                    
+                    # Confirm transaction
+                    conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                    if conf and conf.value:
+                        self.log(f"✅ Direct swap transaction confirmed: {signature}")
+                        return True
+                    self.log(f"❌ Direct swap failed: Transaction not confirmed")
+                    return False
         except Exception as e:
             self.log(f"❌ Direct swap network error: {e}")
             return False
@@ -1211,14 +1280,15 @@ class SniperSession:
                 os.rename(self.LOG_FILE, self.LOG_BACKUP)
 
     def manual_sell_token(self, address):
-        token = self.tokens.get(address)
-        if not token or token.get('sold'):
+        now = time.time()
+        token = None
+        for t in self.tokens.values():
+            if t.get('address') == address and not t.get('sold', False):
+                token = t
+                break
+        if not token:
             self.log(f"[ERROR] Manual sell: Token not found or already sold for address {address}.")
             return False
-        pool_data = self.fetch_dexscreener_pool(address)
-        if pool_data:
-            token['price_usd'] = self.safe_float(pool_data.get('priceUsd'))
-        now = time.time()
         result = self.try_sell(token, now, force=True)
         if not result:
             self.log(f"[ERROR] Manual sell failed for token: {token.get('name', 'N/A')} ({token.get('symbol', 'N/A')})")
