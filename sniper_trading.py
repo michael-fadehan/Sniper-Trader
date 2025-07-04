@@ -1,12 +1,20 @@
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import traceback
 import threading
 import requests
 import json
 import base64
-
-# Imports for Solana and trading logic
+import logging
+import os
+import random
+import re
+import sys
+import time
+import base58
+from solana.rpc.commitment import Commitment
+from solders.message import Message, MessageV0
+from solders.commitment_config import CommitmentLevel
 from solders.transaction import VersionedTransaction, Transaction
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey as PublicKey
@@ -15,58 +23,49 @@ from solana.rpc.types import TxOpts
 from solders.system_program import transfer, TransferParams
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from solders.instruction import Instruction, AccountMeta
-from solders.sysvar import RENT
 from spl.token.constants import TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, WRAPPED_SOL_MINT
 from spl.token.instructions import get_associated_token_address, create_associated_token_account, close_account, CloseAccountParams, transfer as spl_transfer, TransferParams as SPLTransferParams
-import base58
-import time
-import re
-from solana.rpc.commitment import Commitment
-from solders.message import Message, MessageV0
 
-# FIRST_EDIT: add constant for confirmed commitment string
-COMMITMENT_CONFIRMED = "confirmed"  # Solana RPC commitment level
+# Use string-based commitment level for compatibility
+COMMITMENT_CONFIRMED = "confirmed"  # Standard commitment level string
 
 # SECOND_EDIT: helper function to send and confirm VersionedTransaction using current solana-py API
 async def _send_and_confirm_tx(self, transaction: VersionedTransaction) -> bool:
-    """Send a (versioned) transaction and wait for confirmation.
+    """Send the given transaction and wait for confirmation.
 
-    Returns True if the transaction was confirmed, False otherwise.
+    Returns True on success, False otherwise.
     """
     try:
-        # Serialize transaction to bytes and submit
-        raw_tx: bytes = bytes(transaction) if isinstance(transaction, VersionedTransaction) else transaction.serialize()
-        resp = self.client.send_raw_transaction(
-            raw_tx,
-            opts=TxOpts(skip_preflight=False, preflight_commitment=COMMITMENT_CONFIRMED),
-        )
-        # `resp` can be a dict or an RPC Response object depending on solana-py version
-        sig = getattr(resp, "value", None) or resp.get("result")
-        if not sig:
-            self.log(f"❌ RPC send_raw_transaction returned unexpected format: {resp}")
+        self.log(f"[DEBUG] Transaction message: {transaction.message if hasattr(transaction, 'message') else 'N/A'}")
+        self.log(f"[DEBUG] Transaction signatures before send: {[str(s) for s in transaction.signatures]}")
+        
+        # For Trojan bot wallets, we need to send raw transaction bytes
+        raw_tx = bytes(transaction)
+        
+        # Send without duplicate opts parameter
+        resp = self.client.send_raw_transaction(raw_tx)
+        
+        if not resp.value:
+            self.log(f"❌ Unexpected response from send_raw_transaction: {resp}")
             return False
-        self.log(f"Submitted transaction {sig}, awaiting confirmation…")
-        conf = self.client.confirm_transaction(sig, commitment=COMMITMENT_CONFIRMED)
-        # `conf.value` may be None if still confirming; loop until done or timeout
-        max_wait_sec = 30
-        waited = 0
-        while waited < max_wait_sec:
-            value = getattr(conf, "value", conf.get("result", {}))
-            if value and value.get("err") is None:
-                self.log(f"✅ Transaction {sig} confirmed in slot {value.get('slot')}")
-                return True
-            await asyncio.sleep(1)
-            waited += 1
-            conf = self.client.confirm_transaction(sig, commitment=COMMITMENT_CONFIRMED)
-        self.log(f"❌ Transaction {sig} not confirmed within {max_wait_sec}s: {conf}")
+            
+        signature = resp.value
+        self.log(f"[DEBUG] Transaction sent with signature: {signature}")
+        
+        # Use string-based commitment for compatibility
+        conf = self.client.confirm_transaction(signature, commitment="confirmed")
+        if conf and conf.value:
+            self.log(f"[DEBUG] Transaction confirmed with status: {conf.value}")
+            return True
+        
+        self.log(f"❌ Transaction failed to confirm: {conf}")
         return False
+        
     except Exception as exc:
-        self.log(f"❌ Error sending/confirming tx: {exc}\n{traceback.format_exc()}")
+        self.log(f"❌ Error sending/confirming transaction: {exc}\n{traceback.format_exc()}")
         return False
 
 # THIRD_EDIT: add constant and helper for sending transactions with current solana-py API
-COMMITMENT_CONFIRMED = "confirmed"  # Standard commitment level string
-
 async def _send_and_confirm_tx(self, transaction: VersionedTransaction) -> bool:
     """Send the given transaction and wait for confirmation.
 
@@ -74,10 +73,7 @@ async def _send_and_confirm_tx(self, transaction: VersionedTransaction) -> bool:
     """
     try:
         raw_tx = bytes(transaction) if isinstance(transaction, VersionedTransaction) else transaction.serialize()
-        resp = self.client.send_raw_transaction(
-            raw_tx,
-            opts=TxOpts(skip_preflight=False, preflight_commitment=COMMITMENT_CONFIRMED),
-        )
+        resp = self.client.send_raw_transaction(raw_tx)
         signature = getattr(resp, "value", None) if hasattr(resp, "value") else resp.get("result")
         if not signature:
             self.log(f"❌ Unexpected response from send_raw_transaction: {resp}")
@@ -114,25 +110,29 @@ async def execute_buy_token(self, token_mint_address: str, amount_to_spend_sol: 
         quote_response = self._get_jupiter_quote(input_mint, output_mint, amount_sol_lamports, slippage_bps)
         self.log(f"[BUY] Quote outAmount={quote_response.get('outAmount') if quote_response else 'N/A'}, priceImpactPct={quote_response.get('priceImpactPct') if quote_response else 'N/A'}")
         if quote_response:
+            # Strict null check for swapTransaction
+            if not quote_response.get("swapTransaction"):
+                self.log("⚠️ Received quote but no swapTransaction. Skipping...")
+                self.log(f"Last quote error: {quote_response.get('error', 'Unknown error')}")
+                continue
             raw_transaction_bytes = self._get_jupiter_swap_transaction_raw(quote_response)
             self.log(f"[BUY] Jupiter tx bytes length: {len(raw_transaction_bytes) if raw_transaction_bytes else 0}")
             if raw_transaction_bytes:
                 try:
                     self.log(f"Sending Jupiter swap transaction for {token_mint_address[:8]}...")
-                    # 1. Deserialize the transaction
                     swap_transaction_bytes = base64.b64decode(raw_transaction_bytes)
+                    if len(swap_transaction_bytes) < 100:
+                        raise ValueError("Decoded transaction too short — possibly incomplete due to rate limit or error.")
                     transaction = VersionedTransaction.from_bytes(swap_transaction_bytes)
-                    # 2. Log public key and keypair type
                     self.log(f"[DEBUG] Wallet public key: {self.keypair.pubkey()}")
                     self.log(f"[DEBUG] Keypair type: {type(self.keypair)}")
-                    # 3. Log signatures before signing
                     sigs_before = [str(s) for s in getattr(transaction, 'signatures', [])]
                     self.log(f"[DEBUG] Signatures before signing: {sigs_before}")
-                    # 4. Sign the transaction with the wallet keypair
                     transaction.sign([self.keypair])
-                    # 5. Log signatures after signing
                     sigs_after = [str(s) for s in getattr(transaction, 'signatures', [])]
                     self.log(f"[DEBUG] Signatures after signing: {sigs_after}")
+                    self.log(f"[DEBUG] Transaction signed")
+                    self.log(f"[DEBUG] Signatures: {[str(s) for s in transaction.signatures]}")
                     result = await _send_and_confirm_tx(self, transaction)
                     self.log(f"[BUY] Transaction result: {result}")
                     if result:
@@ -148,8 +148,8 @@ async def execute_buy_token(self, token_mint_address: str, amount_to_spend_sol: 
         else:
             self.log(f"❌ Failed to get Jupiter quote for {token_mint_address[:8]}...")
         if attempt < 3:
-            self.log(f"Retrying Jupiter swap in 1 second...")
-            await asyncio.sleep(1)
+            self.log(f"Retrying Jupiter swap in {attempt} second(s)...")
+            await asyncio.sleep(attempt)  # progressive backoff
     self.log(f"⚠️ Jupiter buy failed after 3 attempts for {token_mint_address[:8]}.... Falling back to direct Raydium swap.")
     self.log(f"Attempting direct on-chain buy of {token_mint_address[:8]}... with {amount_to_spend_sol:.4f} SOL ({amount_sol_lamports} lamports)...")
     return await self.execute_direct_swap(
@@ -177,25 +177,29 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
         quote_response = self._get_jupiter_quote(input_mint, output_mint, amount_tokens_atomic, slippage_bps)
         self.log(f"[SELL] Quote outAmount={quote_response.get('outAmount') if quote_response else 'N/A'}, priceImpactPct={quote_response.get('priceImpactPct') if quote_response else 'N/A'}")
         if quote_response:
+            # Strict null check for swapTransaction
+            if not quote_response.get("swapTransaction"):
+                self.log("⚠️ Received quote but no swapTransaction. Skipping...")
+                self.log(f"Last quote error: {quote_response.get('error', 'Unknown error')}")
+                continue
             raw_transaction_bytes = self._get_jupiter_swap_transaction_raw(quote_response)
             self.log(f"[SELL] Jupiter tx bytes length: {len(raw_transaction_bytes) if raw_transaction_bytes else 0}")
             if raw_transaction_bytes:
                 try:
                     self.log(f"Sending Jupiter swap transaction for {token_mint_address[:8]}...")
-                    # 1. Deserialize the transaction
                     swap_transaction_bytes = base64.b64decode(raw_transaction_bytes)
+                    if len(swap_transaction_bytes) < 100:
+                        raise ValueError("Decoded transaction too short — possibly incomplete due to rate limit or error.")
                     transaction = VersionedTransaction.from_bytes(swap_transaction_bytes)
-                    # 2. Log public key and keypair type
                     self.log(f"[DEBUG] Wallet public key: {self.keypair.pubkey()}")
                     self.log(f"[DEBUG] Keypair type: {type(self.keypair)}")
-                    # 3. Log signatures before signing
                     sigs_before = [str(s) for s in getattr(transaction, 'signatures', [])]
                     self.log(f"[DEBUG] Signatures before signing: {sigs_before}")
-                    # 4. Sign the transaction with the wallet keypair
                     transaction.sign([self.keypair])
-                    # 5. Log signatures after signing
                     sigs_after = [str(s) for s in getattr(transaction, 'signatures', [])]
                     self.log(f"[DEBUG] Signatures after signing: {sigs_after}")
+                    self.log(f"[DEBUG] Transaction signed")
+                    self.log(f"[DEBUG] Signatures: {[str(s) for s in transaction.signatures]}")
                     result = await _send_and_confirm_tx(self, transaction)
                     self.log(f"[SELL] Transaction result: {result}")
                     if result:
@@ -211,8 +215,8 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
         else:
             self.log(f"❌ Failed to get Jupiter quote for {token_mint_address[:8]}...")
         if attempt < 3:
-            self.log(f"Retrying Jupiter swap in 1 second...")
-            await asyncio.sleep(1)
+            self.log(f"Retrying Jupiter swap in {attempt} second(s)...")
+            await asyncio.sleep(attempt)  # progressive backoff
     self.log(f"⚠️ Jupiter sell failed after 3 attempts for {token_mint_address[:8]}.... Falling back to direct Raydium swap.")
     self.log(f"Attempting direct on-chain sell of {amount_tokens_to_sell:.4f} of {token_mint_address[:8]}... ({amount_tokens_atomic} atomic units)...")
     return await self.execute_direct_swap(
@@ -223,9 +227,57 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
     )
 
 class SniperSession:
-    def __init__(self, *args, **kwargs):
-        self.buy_lock = threading.Lock()
-        # ... existing code ...
+    """Base class for sniper bot trading functionality"""
+    
+    def __init__(self):
+        self.keypair: Optional[Keypair] = None
+        self.client: Any = None  # RPC client
+        self.seen_tokens: Dict[str, Any] = {}
+    
+    async def _send_and_confirm_tx(self, transaction: VersionedTransaction) -> bool:
+        """Send the given transaction and wait for confirmation."""
+        try:
+            raw_tx = bytes(transaction) if isinstance(transaction, VersionedTransaction) else transaction.serialize()
+            
+            # Send without duplicate opts parameter
+            self.log("[DEBUG] Sending raw transaction...")
+            resp = self.client.send_raw_transaction(raw_tx)
+            
+            if not resp.value:
+                self.log(f"❌ Unexpected response from send_raw_transaction: {resp}")
+                return False
+                
+            signature = resp.value
+            self.log(f"[DEBUG] Transaction sent with signature: {signature}")
+            
+            # Add retry logic for confirmation
+            for attempt in range(3):
+                try:
+                    conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                    if conf and conf.value:
+                        self.log(f"[DEBUG] Transaction confirmed on attempt {attempt + 1}")
+                        return True
+                    self.log(f"[DEBUG] Confirmation attempt {attempt + 1} failed, retrying...")
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    self.log(f"[DEBUG] Confirmation error on attempt {attempt + 1}: {e}")
+                    if attempt < 2:  # Don't sleep on last attempt
+                        await asyncio.sleep(1)
+            
+            self.log("❌ Transaction failed to confirm after 3 attempts")
+            return False
+            
+        except Exception as exc:
+            self.log(f"❌ Error sending/confirming transaction: {exc}\n{traceback.format_exc()}")
+            return False
+
+    def log(self, message: str) -> None:
+        """Log a message. To be implemented by subclasses."""
+        pass
+
+    async def fetch_dexscreener_pool(self, address: str) -> Optional[Dict[str, Any]]:
+        """Fetch pool info from DexScreener. To be implemented by subclasses."""
+        pass
 
     def simulate_buy(self, token, now, from_watchlist=False, force=False):
         if not force:
@@ -469,6 +521,7 @@ class SniperSession:
 # --- BUY/SELL LOGIC FROM sniper_sim.py ---
 
 def execute_buy(self, token_address, amount_sol):
+    # Use VersionedTransaction instead of legacy Transaction
     if self.SIMULATION_MODE:
         return True
     current_balance = self.get_wallet_balance()
@@ -489,22 +542,37 @@ def execute_buy(self, token_address, amount_sol):
             address_lookup_table_accounts=[],
             recent_blockhash=recent_blockhash,
         )
-        transaction = VersionedTransaction(message, [self.keypair])
-        result = self.client.send_transaction(
-            transaction,
-            self.keypair,
-        )
-        if "result" in result:
+        # Create VersionedTransaction
+        transaction = VersionedTransaction(message, [])
+        
+        # Handle both wallet types
+        if hasattr(self.client, 'sign_transaction'):
+            # Trojan wallet
+            transaction = self.client.sign_transaction(transaction)
+            tx_bytes = transaction.serialize()
+        else:
+            # Conventional wallet
+            transaction.sign([self.keypair])
+            tx_bytes = bytes(transaction)
+        
+        # Send without opts parameter
+        result = self.client.send_raw_transaction(tx_bytes)
+        
+        if hasattr(result, 'value') and result.value:
+            print(f"✅ Buy transaction sent: {result.value}")
+            return True
+        elif isinstance(result, dict) and "result" in result:
             print(f"✅ Buy transaction sent: {result['result']}")
             return True
         else:
-            print(f"❌ Buy failed: {result.get('error', 'Unknown error')}")
+            print(f"❌ Buy failed: {result}")
             return False
     except Exception as e:
         print(f"❌ Buy error: {e}")
         return False
 
 def execute_sell(self, token_address, amount_tokens):
+    # Use VersionedTransaction instead of legacy Transaction
     if self.SIMULATION_MODE:
         return True
     try:
@@ -521,16 +589,30 @@ def execute_sell(self, token_address, amount_tokens):
             address_lookup_table_accounts=[],
             recent_blockhash=recent_blockhash,
         )
-        transaction = VersionedTransaction(message, [self.keypair])
-        result = self.client.send_transaction(
-            transaction,
-            self.keypair,
-        )
-        if "result" in result:
+        # Create VersionedTransaction
+        transaction = VersionedTransaction(message, [])
+        
+        # Handle both wallet types
+        if hasattr(self.client, 'sign_transaction'):
+            # Trojan wallet
+            transaction = self.client.sign_transaction(transaction)
+            tx_bytes = transaction.serialize()
+        else:
+            # Conventional wallet
+            transaction.sign([self.keypair])
+            tx_bytes = bytes(transaction)
+        
+        # Send without opts parameter
+        result = self.client.send_raw_transaction(tx_bytes)
+        
+        if hasattr(result, 'value') and result.value:
+            print(f"✅ Sell transaction sent: {result.value}")
+            return True
+        elif isinstance(result, dict) and "result" in result:
             print(f"✅ Sell transaction sent: {result['result']}")
             return True
         else:
-            print(f"❌ Sell failed: {result.get('error', 'Unknown error')}")
+            print(f"❌ Sell failed: {result}")
             return False
     except Exception as e:
         print(f"❌ Sell error: {e}")
@@ -729,3 +811,199 @@ def has_risky_wallet(mint):
         if h.get('owner') in RISKY_WALLETS:
             return True
     return False 
+
+async def execute_token_transfer(self, from_token_account: PublicKey, to_token_account: PublicKey, 
+                               mint_public_id: PublicKey, from_wallet_address: PublicKey, 
+                               amount: int, decimals: int = 9):
+    """Execute a token transfer transaction using the solders SDK"""
+    try:
+        from spl.token.constants import TOKEN_PROGRAM_ID
+        from spl.token.instructions import transfer_checked, TransferCheckedParams
+        
+        self.log(f"[DEBUG] Preparing token transfer:")
+        self.log(f"[DEBUG] - From token account: {from_token_account}")
+        self.log(f"[DEBUG] - To token account: {to_token_account}")
+        self.log(f"[DEBUG] - Token mint: {mint_public_id}")
+        self.log(f"[DEBUG] - Amount: {amount} (decimals: {decimals})")
+        
+        transfer_ix = transfer_checked(
+            TransferCheckedParams(
+                program_id=TOKEN_PROGRAM_ID,
+                source=from_token_account,
+                mint=mint_public_id,
+                destination=to_token_account,
+                owner=from_wallet_address,
+                amount=amount,
+                decimals=decimals,
+                signers=[]
+            )
+        )
+        
+        result = await self._send_transaction_for_wallet_type(None, transfer_ix)
+        if result:
+            self.log("✅ Token transfer transaction confirmed")
+            return True
+        else:
+            self.log("❌ Token transfer failed: Transaction not confirmed")
+            return False
+            
+    except Exception as exc:
+        self.log(f"❌ Error executing token transfer: {exc}\n{traceback.format_exc()}")
+        return False
+
+def _is_trojan_wallet(self) -> bool:
+    """Check if we're using a Trojan-style private key wallet"""
+    return hasattr(self.client, 'sign_transaction') and not isinstance(self.keypair, Keypair)
+
+async def _send_transaction_for_wallet_type(self, transaction, instruction=None) -> bool:
+    """Send transaction handling both wallet types"""
+    try:
+        if self._is_trojan_wallet():
+            # Trojan wallet flow
+            self.log("[DEBUG] Using Trojan wallet signing")
+            if transaction is None and instruction is not None:
+                # Create a new transaction with the instruction
+                recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
+                
+                # Create a versioned transaction
+                message = MessageV0.try_compile(
+                    payer=self.keypair.pubkey(),
+                    instructions=[instruction],
+                    address_lookup_table_accounts=[],
+                    recent_blockhash=recent_blockhash
+                )
+                transaction = VersionedTransaction(message, [])
+            
+            # Let the client handle signing for Trojan wallets
+            signed_tx = self.client.sign_transaction(transaction)
+            tx_bytes = signed_tx.serialize()
+        else:
+            # Conventional wallet flow
+            self.log("[DEBUG] Using conventional wallet signing")
+            if transaction is None and instruction is not None:
+                # Create a new transaction with the instruction
+                recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
+                
+                # Create a versioned transaction
+                message = MessageV0.try_compile(
+                    payer=self.keypair.pubkey(),
+                    instructions=[instruction],
+                    address_lookup_table_accounts=[],
+                    recent_blockhash=recent_blockhash
+                )
+                transaction = VersionedTransaction(message, [])
+            
+            # Sign the transaction
+            transaction.sign([self.keypair])
+            tx_bytes = bytes(transaction)
+
+        # Common sending logic for both wallet types
+        self.log("[DEBUG] Sending transaction...")
+        
+        # Send without opts parameter
+        resp = self.client.send_raw_transaction(tx_bytes)
+        
+        if not resp.value:
+            self.log(f"❌ Unexpected response from send_raw_transaction: {resp}")
+            return False
+            
+        signature = resp.value
+        self.log(f"[DEBUG] Transaction sent with signature: {signature}")
+        
+        # Wait for confirmation
+        for attempt in range(3):  # Try up to 3 times
+            try:
+                conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                if conf and conf.value:
+                    self.log(f"[DEBUG] Transaction confirmed on attempt {attempt + 1}")
+                    return True
+                self.log(f"[DEBUG] Confirmation attempt {attempt + 1} failed, retrying...")
+                await asyncio.sleep(1)
+            except Exception as e:
+                self.log(f"[DEBUG] Confirmation error on attempt {attempt + 1}: {e}")
+                if attempt < 2:  # Don't sleep on last attempt
+                    await asyncio.sleep(1)
+        
+        self.log("❌ Transaction failed to confirm after 3 attempts")
+        return False
+        
+    except Exception as exc:
+        self.log(f"❌ Error sending/confirming transaction: {exc}\n{traceback.format_exc()}")
+        return False
+
+async def create_ata_if_needed(self, mint: PublicKey, owner: PublicKey) -> Optional[PublicKey]:
+    """Create ATA if it doesn't exist, with proper error handling"""
+    try:
+        from spl.token.instructions import get_associated_token_address
+        ata = get_associated_token_address(owner, mint)
+        
+        # Check if ATA exists
+        try:
+            self.client.get_account_info(ata)
+            self.log(f"[DEBUG] ATA exists for mint {mint}")
+            return ata
+        except Exception:
+            self.log(f"[DEBUG] Creating new ATA for mint {mint}")
+            
+            # Create ATA instruction
+            create_ata_ix = create_associated_token_account(
+                payer=owner,
+                owner=owner,
+                mint=mint
+            )
+            
+            # Send as a simple transaction
+            result = await self._send_transaction_for_wallet_type(None, create_ata_ix)
+            if result:
+                self.log(f"[DEBUG] Successfully created ATA {ata}")
+                return ata
+            else:
+                self.log(f"❌ Failed to create ATA for {mint}")
+                return None
+                
+    except Exception as e:
+        self.log(f"❌ Error in ATA creation: {e}")
+        return None
+
+async def execute_token_transfer(self, from_token_account: PublicKey, to_token_account: PublicKey, 
+                               mint_public_id: PublicKey, from_wallet_address: PublicKey, 
+                               amount: int, decimals: int = 9):
+    """Execute a token transfer transaction using the appropriate wallet type"""
+    try:
+        from spl.token.constants import TOKEN_PROGRAM_ID
+        from spl.token.instructions import transfer_checked, TransferCheckedParams
+        
+        self.log(f"[DEBUG] Preparing token transfer:")
+        self.log(f"[DEBUG] - From token account: {from_token_account}")
+        self.log(f"[DEBUG] - To token account: {to_token_account}")
+        self.log(f"[DEBUG] - Token mint: {mint_public_id}")
+        self.log(f"[DEBUG] - Amount: {amount} (decimals: {decimals})")
+        
+        transfer_ix = transfer_checked(
+            TransferCheckedParams(
+                program_id=TOKEN_PROGRAM_ID,
+                source=from_token_account,
+                mint=mint_public_id,
+                destination=to_token_account,
+                owner=from_wallet_address,
+                amount=amount,
+                decimals=decimals,
+                signers=[]
+            )
+        )
+        
+        result = await self._send_transaction_for_wallet_type(None, transfer_ix)
+        if result:
+            self.log("✅ Token transfer transaction confirmed")
+            return True
+        else:
+            self.log("❌ Token transfer failed: Transaction not confirmed")
+            return False
+            
+    except Exception as exc:
+        self.log(f"❌ Error executing token transfer: {exc}\n{traceback.format_exc()}")
+        return False
+
+async def _send_and_confirm_tx(self, transaction: VersionedTransaction) -> bool:
+    """Send the given transaction and wait for confirmation."""
+    return await self._send_transaction_for_wallet_type(transaction) 
