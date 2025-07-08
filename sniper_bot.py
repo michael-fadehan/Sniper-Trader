@@ -33,6 +33,7 @@ from solders.compute_budget import set_compute_unit_limit, set_compute_unit_pric
 from solders.instruction import Instruction, AccountMeta
 from solders.sysvar import RENT # Corrected import name for SYSVAR_RENT_PUBKEY
 from solana.rpc.commitment import Commitment
+import solana.rpc.commitment as sol_commitment
 
 # --- SPL Token Program Imports ---
 from spl.token.constants import TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, WRAPPED_SOL_MINT # Corrected NATIVE_MINT to WRAPPED_SOL_MINT
@@ -52,7 +53,12 @@ SIMULATION_MODE = True
 WALLET_TYPE = "private"
 SEED_PHRASE = ""
 PRIVATE_KEY = ""
-RPC_URL = "https://mainnet.helius-rpc.com/?api-key=3be2d48e-7192-43bf-8323-b80943ab0f1a" # Forced Helius endpoint
+RPC_LIST = [
+    "https://mainnet.helius-rpc.com/?api-key=3be2d48e-7192-43bf-8323-b80943ab0f1a",
+    "https://solana-mainnet.api.syndica.io/api-key/4AM18sWSra766qjy6ZsawZ8KK5uLkk7ik5yRun719egHCNwqXDzuMvNx3HvkPz33H8AujKzdyP55oGxvrSA9Ehp9MFokeNXK3vg",
+    "https://rpc.ankr.com/solana"
+]
+
 STARTING_USD = 100.0
 POSITION_SIZE_USD = 20.0
 BUY_FEE = 0.005
@@ -102,6 +108,71 @@ class RateLimiter:
                 time.sleep(1/self.calls_per_second - time_since_last)
             self.last_call = now # Update last_call to current time
 
+class RotatingSolanaClient:
+    def __init__(self, rpc_list, commitment="confirmed", logger=None):
+        self.rpc_list = rpc_list
+        self.commitment = commitment
+        self.current = 0
+        self.clients = [Client(url) for url in rpc_list]
+        self.logger = logger
+        if self.logger:
+            self.logger(f"[RotatingSolanaClient] Initialized with endpoints: {rpc_list}")
+        else:
+            print(f"[RotatingSolanaClient] Initialized with endpoints: {rpc_list}")
+
+    def _log(self, msg):
+        if self.logger:
+            self.logger(msg)
+        else:
+            print(msg)
+
+    def _rotate(self):
+        prev = self.current
+        self.current = (self.current + 1) % len(self.clients)
+        self._log(f"[RotatingSolanaClient] Rotating RPC endpoint from {self.rpc_list[prev]} to {self.rpc_list[self.current]}")
+
+    def _with_failover(self, func, *args, **kwargs):
+        last_exc = None
+        for attempt in range(len(self.clients)):
+            client = self.clients[self.current]
+            url = self.rpc_list[self.current]
+            try:
+                self._log(f"[RotatingSolanaClient] Using endpoint: {url} (attempt {attempt+1})")
+                result = func(client, *args, **kwargs)
+                self._log(f"[RotatingSolanaClient] Success on endpoint: {url}")
+                return result
+            except Exception as e:
+                self._log(f"[RotatingSolanaClient] Exception on endpoint {url}: {e}. Rotating...")
+                last_exc = e
+                self._rotate()
+        self._log(f"[RotatingSolanaClient] All endpoints failed. Raising last exception.")
+        if last_exc is not None:
+            raise last_exc
+        raise Exception("All RPC endpoints failed")
+
+    def get_latest_blockhash(self, *args, **kwargs):
+        self._log(f"[RotatingSolanaClient] Fetching latest blockhash...")
+        return self._with_failover(lambda c: c.get_latest_blockhash(*args, **kwargs))
+
+    def send_raw_transaction(self, *args, **kwargs):
+        self._log(f"[RotatingSolanaClient] Sending raw transaction...")
+        return self._with_failover(lambda c: c.send_raw_transaction(*args, **kwargs))
+
+    def confirm_transaction(self, *args, **kwargs):
+        self._log(f"[RotatingSolanaClient] Confirming transaction...")
+        return self._with_failover(lambda c: c.confirm_transaction(*args, **kwargs))
+
+    def get_account_info(self, *args, **kwargs):
+        self._log(f"[RotatingSolanaClient] Fetching account info...")
+        return self._with_failover(lambda c: c.get_account_info(*args, **kwargs))
+
+    def get_balance(self, *args, **kwargs):
+        self._log(f"[RotatingSolanaClient] Fetching balance...")
+        return self._with_failover(lambda c: c.get_balance(*args, **kwargs))
+
+    def get_client(self):
+        return self.clients[self.current]
+
 class SniperSession:
     COINGECKO_SOL = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
     # Adjusted interval for more conservative CoinGecko polling
@@ -129,7 +200,7 @@ class SniperSession:
         self.seen_tokens = set()
         self.trades = []
         self.SIMULATION_MODE = kwargs.get("simulation", SIMULATION_MODE)
-        self.RPC_URL = kwargs.get("rpc_url", RPC_URL)  # Force Helius endpoint
+        self.RPC_URL = kwargs.get("rpc_url", RPC_LIST[0])
         self.STARTING_USD = STARTING_USD
         self.SIMULATION_DURATION = kwargs.get("duration", SIMULATION_DURATION)
         if self.SIMULATION_DURATION < 100000:
@@ -165,7 +236,13 @@ class SniperSession:
         self.TERMINAL_WIDTH = TERMINAL_WIDTH
         self.SUMMARY_INTERVAL = SUMMARY_INTERVAL
 
-        self.client = Client(self.RPC_URL)
+        self.client = None
+        if not self.SIMULATION_MODE:
+            wallet_type = kwargs.get("wallet_type", WALLET_TYPE)
+            if wallet_type == "private" or wallet_type == "seed":
+                self.client = RotatingSolanaClient(RPC_LIST, logger=self.log)
+            else:
+                self.client = Client(self.RPC_URL)
         self.stop_threads = False
         self.keypair = None
         self.wallet_address = "SIMULATION_WALLET"
@@ -185,7 +262,7 @@ class SniperSession:
                         private_key_bytes = base58.b58decode(private_key_str)
 
                     self.keypair = Keypair.from_bytes(private_key_bytes)
-                    self.wallet_address = str(self.keypair.pubkey())
+                    self.wallet_address = str(self.keypair.pubkey()) if self.keypair is not None else 'N/A'
                     self.log(f"✅ Wallet initialized: {self.wallet_address[:8]}...{self.wallet_address[-8:]}")
                 except Exception as e:
                     self.log(f"❌ Invalid private key format: {str(e)}")
@@ -200,7 +277,7 @@ class SniperSession:
                     address_key = account.Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
                     private_key = address_key.PrivateKey().Raw().ToBytes()
                     self.keypair = Keypair.from_bytes(private_key)
-                    self.wallet_address = str(self.keypair.pubkey())
+                    self.wallet_address = str(self.keypair.pubkey()) if self.keypair is not None else 'N/A'
                     self.log(f"Initialized wallet from seed phrase: {self.wallet_address}")
                 except Exception as e:
                     self.log(f"❌ Error initializing keypair from seed: {e}")
@@ -519,7 +596,7 @@ class SniperSession:
             self.sol_balance = 100.0 / self.sol_usd
             # Create a simulation keypair
             self.keypair = Keypair()
-            self.wallet_address = str(self.keypair.pubkey())
+            self.wallet_address = str(self.keypair.pubkey()) if self.keypair is not None else 'N/A'
             self.log(f"[DEBUG] Created simulation keypair with address: {self.wallet_address}")
         else:
             self.sol_balance = self.get_wallet_balance()
@@ -615,7 +692,7 @@ class SniperSession:
             return self.sol_balance if self.sol_balance is not None else self.STARTING_USD / self.sol_usd
         else:
             try:
-                if self.wallet_address is None:
+                if self.wallet_address is None or self.client is None:
                     return 0
                 pubkey = PublicKey.from_string(self.wallet_address)
                 response = self.client.get_balance(pubkey)
@@ -668,15 +745,16 @@ class SniperSession:
         Fetches the decimals of an SPL token by querying its mint account on chain.
         """
         try:
-            if mint_address is None:
+            if mint_address is None or self.client is None:
                 return None
             if isinstance(mint_address, str):
                 mint_pubkey = PublicKey.from_string(mint_address)
             else:
                 return None
-            account_info = self.client.get_account_info(mint_pubkey, commitment='confirmed')
+            account_info = self.client.get_account_info(mint_pubkey, commitment=Commitment.confirmed) if self.client is not None else None
+            recent_blockhash = self.client.get_latest_blockhash(commitment=Commitment.confirmed).value.blockhash if self.client is not None else None
 
-            if account_info.value is None:
+            if account_info is None or account_info.value is None:
                 self.log(f"❌ Failed to get account info for mint: {mint_address}")
                 return None
 
@@ -776,25 +854,27 @@ class SniperSession:
         """
         return get_associated_token_address(owner, mint)
 
+    def log_event(self, message):
+        self.log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+
     async def _check_and_create_ata(self, owner: PublicKey, mint: PublicKey) -> Optional[PublicKey]:
         """Check if ATA exists for owner/mint pair, create if not."""
         try:
             ata = get_associated_token_address(owner, mint)
             self.log(f"[DEBUG] Checking ATA for {mint}")
-            
             try:
+                if self.client is None:
+                    self.log(f"[ERROR] No client available for get_account_info.")
+                    return None
                 account_info = self.client.get_account_info(ata)
                 if account_info and account_info.value:
                     self.log(f"[DEBUG] ATA exists for {mint}")
                     return ata
             except Exception as e:
                 self.log(f"[DEBUG] ATA does not exist for {mint}, creating... (Error: {e})")
-            
             self.log(f"[DEBUG] Creating new ATA for {mint}")
             self.log(f"[DEBUG] Owner: {owner}")
             self.log(f"[DEBUG] Mint: {mint}")
-                
-            # Create ATA instruction
             try:
                 create_ata_ix = create_associated_token_account(
                     payer=owner,
@@ -805,71 +885,68 @@ class SniperSession:
             except Exception as e:
                 self.log(f"[ERROR] Failed to create ATA instruction: {e}")
                 return None
-            
-            # Create and send transaction
-            try:
-                # Retry mechanism for blockhash and transaction send
-                max_attempts = 3
-                for attempt in range(max_attempts):
-                    try:
-                        recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
-                        self.log(f"[DEBUG] Got recent blockhash (attempt {attempt+1}): {recent_blockhash}")
-                        # Create a versioned transaction directly
-                        instructions = [create_ata_ix]
-                        message = MessageV0.try_compile(
-                    payer=owner,
-                            instructions=instructions,
-                    address_lookup_table_accounts=[],
-                            recent_blockhash=recent_blockhash
-                        )
-                        self.log(f"[DEBUG] Message compiled successfully (attempt {attempt+1})")
-                        # Create transaction
-                        transaction = VersionedTransaction(message, [self.keypair])
-                        self.log(f"[DEBUG] Transaction created (attempt {attempt+1})")
-                        # Handle both wallet types
-                        if hasattr(self.client, 'sign_transaction'):
-                            # Trojan wallet
-                            self.log("[DEBUG] Using Trojan wallet signing for ATA creation")
-                            transaction = self.client.sign_transaction(transaction)
-                            tx_bytes = transaction.serialize()
-                            self.log(f"[DEBUG] Transaction signed by Trojan wallet")
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    # Only rotate if RotatingSolanaClient
+                    endpoint = None
+                    from sniper_bot import RotatingSolanaClient  # local import to avoid circular
+                    if self.client is not None and isinstance(self.client, RotatingSolanaClient):
+                        if hasattr(self.client, '_rotate'):
+                            self.client._rotate()
+                        if hasattr(self.client, 'get_client'):
+                            client_obj = self.client.get_client()
+                            endpoint = getattr(client_obj, 'endpoint_uri', str(client_obj))
                         else:
-                            # Conventional wallet
-                            self.log("[DEBUG] Using conventional wallet signing for ATA creation")
-                            self.log(f"[DEBUG] Keypair type: {type(self.keypair)}")
-                            self.log(f"[DEBUG] Keypair pubkey: {self.keypair.pubkey() if hasattr(self.keypair, 'pubkey') else 'N/A'}")
-                            tx_bytes = bytes(transaction)
-                            self.log(f"[DEBUG] Transaction signed by conventional wallet")
-                        # Send without opts parameter
-                        self.log(f"[DEBUG] Sending ATA creation transaction for {mint} (attempt {attempt+1})")
-                        resp = self.client.send_raw_transaction(tx_bytes)
-                        self.log(f"[DEBUG] send_raw_transaction response: {resp}")
-                        if not resp or not hasattr(resp, 'value') or 'BlockhashNotFound' in str(resp):
-                            self.log(f"❌ Failed to send ATA creation transaction (blockhash issue): {resp}")
-                            time.sleep(1)
-                            continue
-                        signature = resp.value
-                        self.log(f"[DEBUG] ATA creation transaction sent with signature: {signature}")
-                        # Confirm transaction
-                        conf = self.client.confirm_transaction(signature, commitment="confirmed")
-                        self.log(f"[DEBUG] Confirmation response: {conf}")
-                        if conf and conf.value:
-                            self.log(f"✅ Successfully created ATA {ata}")
-                            return ata
-                        else:
-                            self.log(f"❌ ATA creation transaction failed to confirm (attempt {attempt+1})")
-                            time.sleep(1)
-                            continue
-                    except Exception as e:
-                        self.log(f"[ERROR] Failed during transaction creation/sending (attempt {attempt+1}): {e}\n{traceback.format_exc()}")
+                            endpoint = str(self.client)
+                    else:
+                        endpoint = str(self.client) if self.client is not None else 'None'
+                    self.log_event(f"[ATA] Attempt {attempt+1}: Using endpoint {endpoint}")
+                    if self.client is None:
+                        self.log_event(f"[ATA] No client available for blockhash fetch.")
+                        return None
+                    self.log_event(f"[ATA] Attempt {attempt+1}: Fetching fresh blockhash for ATA creation")
+                    recent_blockhash = self.client.get_latest_blockhash(commitment=sol_commitment.Confirmed).value.blockhash
+                    self.log_event(f"[ATA] Fetched blockhash: {recent_blockhash}")
+                    instructions = [create_ata_ix]
+                    message = MessageV0.try_compile(
+                        payer=owner,
+                        instructions=instructions,
+                        address_lookup_table_accounts=[],
+                        recent_blockhash=recent_blockhash
+                    )
+                    self.log_event(f"[ATA] Message compiled successfully (attempt {attempt+1})")
+                    if self.keypair is None:
+                        self.log_event("[ATA] No keypair available for signing transaction.")
+                        return None
+                    transaction = VersionedTransaction(message, [self.keypair])
+                    self.log_event(f"[ATA] Transaction created (attempt {attempt+1})")
+                    transaction_signed = True
+                    self.log_event(f"[ATA] Transaction signed successfully (conventional wallet).")
+                    self.log_event(f"[ATA] Sending ATA creation transaction for {mint} (attempt {attempt+1})")
+                    resp = self.client.send_raw_transaction(bytes(transaction))
+                    self.log_event(f"[ATA] send_raw_transaction response: {resp}")
+                    if not resp or not hasattr(resp, 'value') or 'BlockhashNotFound' in str(resp):
+                        self.log_event(f"[ATA] Failed to send ATA creation transaction (blockhash issue): {resp}")
                         time.sleep(1)
                         continue
-                self.log(f"❌ All attempts to create ATA failed for {mint}")
-                return None
-            except Exception as e:
-                self.log(f"[ERROR] Failed during transaction creation/sending: {e}\n{traceback.format_exc()}")
-                return None
-                
+                    signature = resp.value
+                    self.log_event(f"[ATA] ATA creation transaction sent with signature: {signature}")
+                    conf = self.client.confirm_transaction(signature, commitment=sol_commitment.Confirmed)
+                    self.log_event(f"[ATA] Confirmation response: {conf}")
+                    if conf and conf.value:
+                        self.log_event(f"[ATA] Successfully created ATA {ata}")
+                        return ata
+                    else:
+                        self.log_event(f"[ATA] ATA creation transaction failed to confirm (attempt {attempt+1})")
+                        time.sleep(1)
+                        continue
+                except Exception as e:
+                    self.log_event(f"[ATA] Failed during transaction creation/sending (attempt {attempt+1}): {e}\n{traceback.format_exc()}")
+                    time.sleep(1)
+                    continue
+            self.log_event(f"❌ All attempts to create ATA failed for {mint}")
+            return None
         except Exception as e:
             self.log(f"❌ Error checking/creating ATA for {mint}: {e}\n{traceback.format_exc()}")
             return None
@@ -995,174 +1072,140 @@ class SniperSession:
                                   pool_info: Dict[str, Any]) -> bool:
         """
         Executes a direct on-chain swap using Raydium AMM V4.
-        
-        Args:
-            token_mint_address (str): The mint address of the token to buy/sell.
-            amount_in_atomic (int): The amount of input tokens (in atomic units) to swap.
-            is_buy (bool): True if buying the token (SOL -> Token), False if selling (Token -> SOL).
-            pool_info (Dict[str, Any]): The pool information from Dexscreener, containing 'pairAddress', etc.
-        
-        Returns:
-            bool: True if the transaction was sent successfully, False otherwise.
         """
         if self.SIMULATION_MODE:
             action = "buy" if is_buy else "sell"
-            self.log(f"SIMULATION: Attempting direct {action} of token {token_mint_address[:8]}... with {amount_in_atomic} atomic units.")
+            self.log_event(f"SIMULATION: Attempting direct {action} of token {token_mint_address[:8]}... with {amount_in_atomic} atomic units.")
             return True
-
         if not self.keypair:
-            self.log("❌ Direct swap error: Wallet keypair not initialized for live mode.")
+            self.log_event("❌ Direct swap error: Wallet keypair not initialized for live mode.")
             return False
-
-        payer = self.keypair.pubkey()
+        payer = self.keypair.pubkey() if self.keypair is not None else None
         token_mint_pubkey = PublicKey.from_string(token_mint_address)
-
-        # Get pool keys (simulated - REMEMBER TO REPLACE WITH REAL ON-CHAIN FETCHING)
         pool_keys = self._get_raydium_pool_keys(token_mint_address, pool_info)
         if not pool_keys:
-            self.log(f"❌ Direct swap failed: Could not get Raydium pool keys for {token_mint_address}.")
+            self.log_event(f"❌ Direct swap failed: Could not get Raydium pool keys for {token_mint_address}.")
             return False
-
-        # Determine input/output token accounts
         if is_buy:
-            # Buying: SOL (input) -> Token (output)
-            # For SOL, the input token account will be the user's WSOL ATA.
-            # If it doesn't exist, it will be created.
             source_token_account = await self._check_and_create_ata(payer, WRAPPED_SOL_MINT)
             destination_token_account = await self._check_and_create_ata(payer, token_mint_pubkey)
         else:
-            # Selling: Token (input) -> SOL (output)
-            # The source will be the user's ATA for the token being sold.
             source_token_account = self._get_associated_token_account(payer, token_mint_pubkey)
-            # The destination for SOL will be the user's WSOL ATA.
             destination_token_account = await self._check_and_create_ata(payer, WRAPPED_SOL_MINT)
-            
         if source_token_account is None or destination_token_account is None:
-            self.log(f"❌ Direct swap failed: Could not get/create necessary ATAs.")
+            self.log_event(f"❌ Direct swap failed: Could not get/create necessary ATAs.")
             return False
-
-        # Build instructions
         instructions = []
-
-        # 1. Prioritization Fee Instruction
         instructions.append(set_compute_unit_price(DIRECT_SWAP_PRIORITIZATION_FEE_LAMPORTS_PER_CU))
         instructions.append(set_compute_unit_limit(DIRECT_SWAP_COMPUTE_UNIT_LIMIT))
-
-        # 2. Wrap SOL if buying (SOL is input) - this is handled implicitly by the Raydium swap
-        # instruction if the user's WSOL ATA is used as the source token account.
-        # The `_check_and_create_ata` for NATIVE_MINT ensures the WSOL ATA exists.
-        # A separate `sync_native` instruction might be needed if the WSOL balance isn't updated
-        # automatically by the swap, but often the AMM handles this.
-
-        # 3. Raydium Swap Instruction (Simplified structure)
-        # Instruction data for Raydium V4 `swapBaseIn` is `[8, amount_in, min_amount_out]`
-        # where amount_in and min_amount_out are u64.
-        # `min_amount_out` is the slippage tolerance. For real execution, calculate this
-        # based on expected output and desired slippage.
-        # For this example, we'll use a very low minimum to allow any positive output.
-        min_amount_out_atomic = 1 # Placeholder for minimum amount out (for slippage)
+        min_amount_out_atomic = 1
         instruction_data = b'\x08' + amount_in_atomic.to_bytes(8, 'little') + min_amount_out_atomic.to_bytes(8, 'little')
-
-        # Accounts required for Raydium V4 swap (ORDER MATTERS!)
-        # These are based on Raydium's program IDL.
-        # These public keys MUST be obtained from the on-chain state of the Raydium pool.
         accounts = [
-            AccountMeta(pubkey=TOKEN_PROGRAM_ID, is_signer=False, is_writable=False), # Token Program
-            AccountMeta(pubkey=pool_keys["amm_id"], is_signer=False, is_writable=True), # AMM ID
-            AccountMeta(pubkey=pool_keys["amm_authority"], is_signer=False, is_writable=False), # AMM Authority
-            AccountMeta(pubkey=pool_keys["amm_open_orders"], is_signer=False, is_writable=True), # AMM Open Orders
-            AccountMeta(pubkey=pool_keys["amm_target_orders"], is_signer=False, is_writable=True), # AMM Target Orders
-            AccountMeta(pubkey=pool_keys["pool_coin_token_account"], is_signer=False, is_writable=True), # Pool Coin Token Account
-            AccountMeta(pubkey=pool_keys["pool_pc_token_account"], is_signer=False, is_writable=True), # Pool PC Token Account
-            AccountMeta(pubkey=pool_keys["lp_mint_address"], is_signer=False, is_writable=True), # LP Mint
-            AccountMeta(pubkey=pool_keys["market_program_id"], is_signer=False, is_writable=False), # Market Program ID (Serum DEX)
-            AccountMeta(pubkey=pool_keys["market_id"], is_signer=False, is_writable=True), # Market ID
-            AccountMeta(pubkey=pool_keys["market_bids"], is_signer=False, is_writable=True), # Market Bids
-            AccountMeta(pubkey=pool_keys["market_asks"], is_signer=False, is_writable=True), # Market Asks
-            AccountMeta(pubkey=pool_keys["market_event_queue"], is_signer=False, is_writable=True), # Market Event Queue
-            AccountMeta(pubkey=pool_keys["market_coin_vault"], is_signer=False, is_writable=True), # Market Coin Vault
-            AccountMeta(pubkey=pool_keys["market_pc_vault"], is_signer=False, is_writable=True), # Market PC Vault
-            AccountMeta(pubkey=payer, is_signer=True, is_writable=True), # User Wallet (for SOL balance changes, fees, etc.)
-            AccountMeta(pubkey=source_token_account, is_signer=False, is_writable=True), # User Source Token Account (WSOL ATA or Token ATA)
-            AccountMeta(pubkey=destination_token_account, is_signer=False, is_writable=True), # User Destination Token Account (Token ATA or WSOL ATA)
-            AccountMeta(pubkey=RENT, is_signer=False, is_writable=False), # Changed from SYSVAR_RENT_PUBKEY to RENT
-            AccountMeta(pubkey=pool_keys["pool_withdraw_queue"], is_signer=False, is_writable=True), # Additional Raydium V4 account
-            AccountMeta(pubkey=pool_keys["pool_lp_vault"], is_signer=False, is_writable=True),       # Additional Raydium V4 account
+            AccountMeta(pubkey=TOKEN_PROGRAM_ID, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=pool_keys["amm_id"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["amm_authority"], is_signer=False, is_writable=False),
+            AccountMeta(pubkey=pool_keys["amm_open_orders"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["amm_target_orders"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["pool_coin_token_account"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["pool_pc_token_account"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["lp_mint_address"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_program_id"], is_signer=False, is_writable=False),
+            AccountMeta(pubkey=pool_keys["market_id"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_bids"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_asks"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_event_queue"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_coin_vault"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["market_pc_vault"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=payer, is_signer=True, is_writable=True),
+            AccountMeta(pubkey=source_token_account, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=destination_token_account, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=RENT, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=pool_keys["pool_withdraw_queue"], is_signer=False, is_writable=True),
+            AccountMeta(pubkey=pool_keys["pool_lp_vault"], is_signer=False, is_writable=True),
         ]
-
         swap_instruction = Instruction(
             program_id=RAYDIUM_AMM_V4_PROGRAM_ID,
             accounts=accounts,
             data=instruction_data
         )
         instructions.append(swap_instruction)
-
-        # 4. Unwrap SOL if selling (SOL is output) and input was WSOL
-        # This occurs if the destination is the user's WSOL ATA and we are selling tokens for SOL.
-        # The `close_account` instruction will close the WSOL ATA and transfer remaining SOL to the user's wallet.
         if not is_buy and destination_token_account == self._get_associated_token_account(payer, WRAPPED_SOL_MINT):
-            # Ensure the source_token_account is not the NATIVE_MINT itself, but the ATA for it.
-            # The logic here assumes `destination_token_account` is the WSOL ATA.
             close_wsol_ix = close_account(
                 CloseAccountParams(
-                    account=destination_token_account, # Account to close (WSOL ATA)
-                    destination=payer,                 # Where to send remaining SOL (user's wallet)
-                    owner=payer,                       # Owner of the account to close
+                    account=destination_token_account,
+                    destination=payer,
+                    owner=payer,
                     program_id=TOKEN_PROGRAM_ID
                 )
             )
             instructions.append(close_wsol_ix)
-
-        self.log(f"Building direct swap transaction for {token_mint_address[:8]}...")
-        try:
-            recent_blockhash = self.client.get_latest_blockhash(commitment='confirmed').value.blockhash
-            transaction = VersionedTransaction(
-                MessageV0.try_compile(
-                    payer=payer,
-                    instructions=instructions,
-                    address_lookup_table_accounts=[],
-                    recent_blockhash=recent_blockhash,
-                ),
-                [] # Signatures, will be added by keypair.sign_versioned_transaction
-            )
-            if hasattr(transaction, 'sign_partial'):
-                transaction.sign_partial([self.keypair])
-            else:
-                transaction.sign([self.keypair])
-        except Exception as e:
-            self.log(f"❌ Direct swap error: Failed to build/sign transaction: {e}")
-            return False
-
-        self.log("Sending direct swap transaction to Solana network...")
-        try:
-            # Use send_transaction for better reliability in live execution
-            if self.keypair is not None:
-                self.log(f"DEBUG: Sending direct swap transaction...")
-                
-                # Convert to raw bytes for sending
-                raw_tx = bytes(transaction)
-                
-                # Send without opts parameter
-                result = self.client.send_raw_transaction(raw_tx)
-                
-                self.log(f"Transaction result: {result}")
-                if not result.value:
-                    self.log(f"❌ Direct swap failed: Transaction error")
+        MAX_RETRIES = 3
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                endpoint = None
+                from sniper_bot import RotatingSolanaClient  # local import to avoid circular
+                if self.client is not None and isinstance(self.client, RotatingSolanaClient):
+                    if hasattr(self.client, '_rotate'):
+                        self.client._rotate()
+                    if hasattr(self.client, 'get_client'):
+                        client_obj = self.client.get_client()
+                        endpoint = getattr(client_obj, 'endpoint_uri', str(client_obj))
+                    else:
+                        endpoint = str(self.client)
+                else:
+                    endpoint = str(self.client) if self.client is not None else 'None'
+                self.log_event(f"[SWAP] Attempt {attempt}: Using endpoint {endpoint}")
+                if self.client is None:
+                    self.log_event(f"[SWAP] No client available for blockhash fetch.")
                     return False
+                self.log_event(f"[SWAP] Attempt {attempt}: Fetching fresh blockhash for direct swap")
+                recent_blockhash = self.client.get_latest_blockhash(commitment=sol_commitment.Confirmed).value.blockhash
+                self.log_event(f"[SWAP] Fetched blockhash: {recent_blockhash}")
+                transaction = VersionedTransaction(
+                    MessageV0.try_compile(
+                        payer=payer,
+                        instructions=instructions,
+                        address_lookup_table_accounts=[],
+                        recent_blockhash=recent_blockhash,
+                    ),
+                    []
+                )
+                if self.keypair is None:
+                    self.log("❌ No keypair available for signing transaction.")
+                    return False
+                transaction = VersionedTransaction(transaction.message, [self.keypair])
+                transaction_signed = True
+                if not transaction_signed:
+                    self.log("❌ Transaction was not signed. Aborting.")
+                    return False
+                self.log_event("[SWAP] Sending direct swap transaction to Solana network...")
+                raw_tx = bytes(transaction)
+                result = self.client.send_raw_transaction(raw_tx)
+                self.log_event(f"[SWAP] Transaction result: {result}")
+                if not result.value:
+                    self.log_event(f"[SWAP] Direct swap failed: Transaction error")
+                    continue
                 else:
                     signature = result.value
-                    self.log(f"Transaction sent with signature: {signature}")
-                    
-                    # Confirm transaction
-                    conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                    self.log_event(f"[SWAP] Transaction sent with signature: {signature}")
+                    conf = self.client.confirm_transaction(signature, commitment=sol_commitment.Confirmed)
+                    self.log_event(f"[SWAP] Confirmation response: {conf}")
                     if conf and conf.value:
-                        self.log(f"✅ Direct swap transaction confirmed: {signature}")
+                        self.log_event(f"[SWAP] Direct swap transaction confirmed: {signature}")
                         return True
-                    self.log(f"❌ Direct swap failed: Transaction not confirmed")
+                    self.log_event(f"[SWAP] Direct swap failed: Transaction not confirmed")
+                    continue
+            except Exception as e:
+                self.log_event(f"[SWAP] Direct swap network error (attempt {attempt}): {e}")
+                if "Blockhash not found" in str(e) and attempt < MAX_RETRIES:
+                    self.log_event("[SWAP] Retrying with a new blockhash...")
+                    time.sleep(1)
+                    continue
+                else:
+                    self.log_event("[SWAP] Giving up after max retries or non-blockhash error.")
                     return False
-        except Exception as e:
-            self.log(f"❌ Direct swap network error: {e}")
-            return False
+        self.log_event("[SWAP] All attempts to send direct swap transaction failed.")
+        return False
 
     def print_status(self):
         now = time.time()
@@ -1319,7 +1362,6 @@ class SniperSession:
             self.log(f"[WARNING] Skipping Dexscreener pool fetch for {mint}: Appears to be a non-Solana (EVM) address.")
             print(f"[DEBUG FETCH] Returning None. Reason: Non-Solana address format.")
             return None
-        # Try /token-pairs endpoint first
         url1 = self.DEX_TOKEN_PAIRS_URL + str(mint)
         try:
             self.dexscreener_rate_limiter.wait()
@@ -1330,7 +1372,6 @@ class SniperSession:
                     return data1['pairs'][0]
                 elif isinstance(data1, list) and data1:
                     return data1[0]
-            # If no data, try /pairs endpoint as fallback
             url2 = f"https://api.dexscreener.com/pairs/solana/{mint}"
             resp2 = requests.get(url2, timeout=5)
             if resp2.status_code == 200:
@@ -1339,7 +1380,6 @@ class SniperSession:
                     return data2['pair']
                 elif isinstance(data2, list) and data2:
                     return data2[0]
-            # Log detailed error if both fail
             error_msg = (
                 f"[ERROR] Dexscreener API: No pool data found for {mint}.\n"
                 f"/token-pairs status: {resp1.status_code}, body: {resp1.text[:200]}\n"
@@ -1536,7 +1576,8 @@ class SniperSession:
             finally:
                 pending_tasks = asyncio.all_tasks(self.loop)
                 for task in pending_tasks:
-                    task.cancel()
+                    if task is not None and hasattr(task, 'cancel'):
+                        task.cancel()
                 self.loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
                 self.loop.close()
                 self.log("WebSocket loop closed.")
@@ -1554,6 +1595,49 @@ class SniperSession:
         self.MIN_PAIR_AGE_SECONDS = 0
         self.MAX_PAIR_AGE_SECONDS = float("inf")
         self.log("[CONFIG] Initial snipe filters disabled – polling will include all tokens.")
+
+    def try_sell(self, token, now, force=False):
+        if token['sold']:
+            self.log(f"[ERROR] Try sell: Token already sold: {token.get('name', 'N/A')} ({token.get('symbol', 'N/A')})")
+            return False
+        mint = token['address']
+        name = token['name']
+        symbol = token['symbol']
+        cur_price = float(self.safe_float(token.get('price_usd')) or 0.0)
+        buy_price_val = self.safe_float(token.get('buy_price_usd'))
+        buy_price = float(buy_price_val) if buy_price_val is not None else 0.0
+        tp_mult = float(self.TAKE_PROFIT_MULT) if self.TAKE_PROFIT_MULT is not None else 0.0
+        sl_mult = float(self.STOP_LOSS_MULT) if self.STOP_LOSS_MULT is not None else 0.0
+        tp = float(buy_price) * float(tp_mult)
+        sl = float(buy_price) * float(sl_mult)
+        if cur_price == 0.0 or buy_price == 0.0:
+            self.log(f"[ERROR] Try sell: No price data for token: {name} ({symbol})")
+            return False
+        self.log(f"[DEBUG] try_sell: buy_price={buy_price}, cur_price={cur_price}, TP={tp}, SL={sl}, TAKE_PROFIT_PCT={self.TAKE_PROFIT_PCT}, STOP_LOSS_PCT= {self.STOP_LOSS_PCT}, force={force}")
+        if not force:
+            if cur_price >= tp:
+                reason = "TAKE_PROFIT"
+            elif cur_price <= sl:
+                reason = "STOP_LOSS"
+            else:
+                return False
+        else:
+            reason = "MANUAL"
+        sell_amt_usd_val = self.safe_float(token.get('amount_left_usd'))
+        sell_amt_usd = float(sell_amt_usd_val) if sell_amt_usd_val is not None else 0.0
+        token_decimals = self._get_token_decimals_from_chain(mint)
+        if token_decimals is None:
+            self.log(f"❌ Sell failed: Could not determine decimals for token {mint}.")
+            return False
+        actual_tokens_to_sell = sell_amt_usd / cur_price if cur_price > 0.0 else 0.0
+        if actual_tokens_to_sell <= 0.0:
+            self.log(f"❌ Sell failed: No tokens to sell for {name} ({symbol}).")
+            return False
+        pool_data = self.fetch_dexscreener_pool(mint)
+        if not pool_data:
+            self.log(f"[ERROR] Sell: Could not fetch pool data for {mint}. Cannot perform direct swap.")
+            return False
+        # ... existing code ...
 
 def has_required_socials(token):
     socials = token.get('socials', {})
