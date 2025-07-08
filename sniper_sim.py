@@ -25,7 +25,7 @@ import sniper_trading
 SIMULATION_MODE = True     # Set to False to use real wallet
 WALLET_TYPE = "private"      # "seed" for seed phrase, "private" for private key
 SEED_PHRASE = ""          # Your 12/24 word seed phrase (when WALLET_TYPE = "seed")
-PRIVATE_KEY = ""          # Your private key (when WALLET_TYPE = "private")
+PRIVATE_KEY = "Gi5mMxQJvT28K5eZ1Z6Pic88V1CRD3YotRqTpJyaBSGFZ1vUhicTLKnJwJP7JoY6W1syJK7zyN2vDAFRfCcHh7x"          # Your private key (when WALLET_TYPE = "private")
 RPC_URL = "https://api.mainnet-beta.solana.com"  # Solana RPC URL
 
 # Trading Settings
