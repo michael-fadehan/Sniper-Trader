@@ -293,6 +293,8 @@ class DashboardFrame(ctk.CTkFrame):
         else:
             ctk.CTkLabel(self.open_scroll, text="No open trades.", font=FONT_BODY, text_color=TURBO_GRAY).pack(pady=SPACING_MD, padx=SPACING_MD)
         # Modern card for each closed trade
+        if 'closed_trades' not in locals():
+            closed_trades = []
         if closed_trades:
             for trade in closed_trades:
                 card = ctk.CTkFrame(self.closed_scroll, fg_color=TURBO_BLACK, corner_radius=CARD_RADIUS)
