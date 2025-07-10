@@ -8,6 +8,7 @@ import time
 import requests
 import uuid
 from collections import deque
+from PIL import Image
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -71,6 +72,35 @@ trades_label_kwargs = {
     "text_color": TURBO_WHITE,
     "font": ("Montserrat", 14, "bold"),
 }
+
+# --- UI/UX POLISH CONSTANTS ---
+SPACING_XL = 24
+SPACING_LG = 16
+SPACING_MD = 10
+SPACING_SM = 6
+CARD_RADIUS = 16
+BTN_RADIUS = 12
+INPUT_RADIUS = 10
+CARD_BORDER = 2
+BTN_HEIGHT = 36
+BTN_WIDTH = 120
+FONT_HEADER = ("Montserrat", 20, "bold")
+FONT_SUBHEADER = ("Montserrat", 16, "bold")
+FONT_BODY = ("Montserrat", 14)
+FONT_STAT = ("Montserrat", 15, "bold")
+
+# Update all CTkFrame, CTkButton, CTkEntry, CTkLabel, etc. to use these constants for padding, font, and radius.
+# Example for cards in dashboard:
+# card = ctk.CTkFrame(self.open_scroll, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS, border_width=CARD_BORDER, border_color=TURBO_CYAN)
+# card.pack(fill="x", padx=SPACING_XL, pady=SPACING_LG, ipadx=SPACING_MD, ipady=SPACING_MD)
+# ctk.CTkLabel(card, text=f"Name: {name}", font=FONT_SUBHEADER, pady=SPACING_SM).pack(anchor="w", padx=SPACING_MD)
+# ctk.CTkLabel(card, text=f"PnL: {pnl_str}", font=FONT_STAT, text_color=color, pady=SPACING_SM).pack(anchor="w", padx=SPACING_MD)
+# sell_btn = ctk.CTkButton(card, text="Sell", fg_color=TURBO_ERROR, hover_color=TURBO_PURPLE, text_color=TURBO_WHITE, width=BTN_WIDTH, height=BTN_HEIGHT, corner_radius=BTN_RADIUS, font=FONT_BODY, pady=SPACING_SM)
+# sell_btn.pack(anchor="e", padx=SPACING_MD, pady=(SPACING_MD, 0))
+#
+# Apply similar spacing, font, and radius improvements to all sections: sidebar, settings, manual buy, logs, license, about, etc.
+#
+# Do not change any logic or functionality—only update visual/layout parameters for a more modern, appealing look.
 
 # --- Sidebar ---
 class Sidebar(ctk.CTkFrame):
@@ -145,36 +175,36 @@ class DashboardFrame(ctk.CTkFrame):
         self.get_summary = get_summary
         self.manual_sell_callback = manual_sell_callback
         self.configure(fg_color=TURBO_BLACK)
-        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=14, width=900)
-        self.panel.pack(expand=True, fill="both", pady=40, padx=40)
+        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.panel.pack(expand=True, fill="both", pady=SPACING_LG, padx=SPACING_XL, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.panel.pack_propagate(False)
         # Top: Start/Stop Buttons
         btns_frame = ctk.CTkFrame(self.panel, fg_color="transparent")
-        btns_frame.pack(pady=(40, 10))
+        btns_frame.pack(pady=(SPACING_MD, SPACING_MD), padx=SPACING_MD)
         self.start_btn = ctk.CTkButton(
             btns_frame, text="Start Bot", font=FONT_DASHBOARD,
             fg_color=TURBO_BLACK, border_color=TURBO_CYAN, border_width=3,
-            text_color=TURBO_CYAN, corner_radius=14, width=170, height=54,
+            text_color=TURBO_CYAN, corner_radius=BTN_RADIUS, width=BTN_WIDTH, height=BTN_HEIGHT,
             hover_color=TURBO_NAVY, command=self.start_callback
         )
-        self.start_btn.grid(row=0, column=0, padx=30)
+        self.start_btn.grid(row=0, column=0, padx=SPACING_SM, pady=SPACING_SM)
         self.stop_btn = ctk.CTkButton(
             btns_frame, text="Stop Bot", font=FONT_DASHBOARD,
             fg_color=TURBO_BLACK, border_color=TURBO_PURPLE, border_width=3,
-            text_color=TURBO_PURPLE, corner_radius=14, width=170, height=54,
+            text_color=TURBO_PURPLE, corner_radius=BTN_RADIUS, width=BTN_WIDTH, height=BTN_HEIGHT,
             hover_color=TURBO_NAVY, command=self.stop_callback
         )
-        self.stop_btn.grid(row=0, column=1, padx=30)
+        self.stop_btn.grid(row=0, column=1, padx=SPACING_SM, pady=SPACING_SM)
         # Centered Status Label
         self.status_var = ctk.StringVar(value="Status: stopped")
         self.status_label = ctk.CTkLabel(
             self.panel, textvariable=self.status_var, font=FONT_STATUS, text_color=TURBO_CYAN, fg_color="transparent"
         )
-        self.status_label.pack(pady=(10, 20))
+        self.status_label.pack(pady=(SPACING_MD, SPACING_MD), padx=SPACING_MD)
         self.after(1000, self.update_status)
         # --- Summary Panel ---
-        self.summary_panel = ctk.CTkFrame(self.panel, fg_color=TURBO_DARK_GRAY, corner_radius=10)
-        self.summary_panel.pack(pady=(0, 30), padx=20, fill="x")
+        self.summary_panel = ctk.CTkFrame(self.panel, fg_color=TURBO_DARK_GRAY, corner_radius=CARD_RADIUS)
+        self.summary_panel.pack(pady=(SPACING_MD, SPACING_MD), padx=SPACING_MD, fill="x")
         self.summary_labels = {}
         grid = [
             ("Initial Balance", 0, 0),
@@ -184,29 +214,29 @@ class DashboardFrame(ctk.CTkFrame):
             ("Last Updated", 0, 4),
         ]
         for label, row, col in grid:
-            l = ctk.CTkLabel(self.summary_panel, text=f"{label}:", font=("Montserrat", 13, "bold"), text_color=TURBO_GRAY)
-            l.grid(row=row, column=col*2, sticky="e", padx=(10,2), pady=10)
-            v = ctk.CTkLabel(self.summary_panel, text="-", font=("Montserrat", 13, "bold"), text_color=TURBO_WHITE)
-            v.grid(row=row, column=col*2+1, sticky="w", padx=(2,20), pady=10)
+            l = ctk.CTkLabel(self.summary_panel, text=f"{label}:", font=FONT_SUBHEADER, text_color=TURBO_GRAY)
+            l.grid(row=row, column=col*2, sticky="e", padx=(SPACING_SM, SPACING_MD), pady=SPACING_SM)
+            v = ctk.CTkLabel(self.summary_panel, text="-", font=FONT_STAT, text_color=TURBO_WHITE)
+            v.grid(row=row, column=col*2+1, sticky="w", padx=(SPACING_MD, SPACING_MD), pady=SPACING_SM)
             self.summary_labels[label] = v
         self.summary_panel.grid_columnconfigure((1,3,5,7,9), weight=1)
         # Delay first summary refresh to avoid AttributeError
         self.after(500, self.refresh_summary)
         # --- Trades Panels ---
         bottom_frame = ctk.CTkFrame(self.panel, fg_color="transparent")
-        bottom_frame.pack(expand=True, fill="both", pady=(0, 30))
-        self.open_trades_panel = ctk.CTkFrame(bottom_frame, fg_color=TURBO_NAVY, corner_radius=14)
-        self.closed_trades_panel = ctk.CTkFrame(bottom_frame, fg_color=TURBO_NAVY, corner_radius=14)
-        self.open_trades_panel.pack(side="left", expand=True, fill="both", padx=(60, 15), pady=0)
-        self.closed_trades_panel.pack(side="left", expand=True, fill="both", padx=(15, 60), pady=0)
+        bottom_frame.pack(expand=True, fill="both", pady=(SPACING_MD, SPACING_MD), padx=SPACING_MD)
+        self.open_trades_panel = ctk.CTkFrame(bottom_frame, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.closed_trades_panel = ctk.CTkFrame(bottom_frame, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.open_trades_panel.pack(side="left", expand=True, fill="both", padx=(SPACING_MD, SPACING_SM), pady=SPACING_SM)
+        self.closed_trades_panel.pack(side="left", expand=True, fill="both", padx=(SPACING_SM, SPACING_MD), pady=SPACING_SM)
         open_label = ctk.CTkLabel(self.open_trades_panel, text="Open Trades", font=FONT_DASHBOARD, text_color=TURBO_CYAN, fg_color="transparent")
-        open_label.pack(pady=10)
+        open_label.pack(pady=SPACING_SM, padx=SPACING_MD)
         closed_label = ctk.CTkLabel(self.closed_trades_panel, text="Closed Trades", font=FONT_DASHBOARD, text_color=TURBO_PURPLE, fg_color="transparent")
-        closed_label.pack(pady=10)
-        self.open_scroll = ctk.CTkScrollableFrame(self.open_trades_panel, fg_color=TURBO_DARK_GRAY, corner_radius=10)
-        self.open_scroll.pack(expand=True, fill="both", padx=10, pady=10)
-        self.closed_scroll = ctk.CTkScrollableFrame(self.closed_trades_panel, fg_color=TURBO_DARK_GRAY, corner_radius=10)
-        self.closed_scroll.pack(expand=True, fill="both", padx=10, pady=10)
+        closed_label.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.open_scroll = ctk.CTkScrollableFrame(self.open_trades_panel, fg_color=TURBO_DARK_GRAY, corner_radius=CARD_RADIUS)
+        self.open_scroll.pack(expand=True, fill="both", padx=SPACING_MD, pady=SPACING_MD, ipadx=SPACING_MD, ipady=SPACING_MD)
+        self.closed_scroll = ctk.CTkScrollableFrame(self.closed_trades_panel, fg_color=TURBO_DARK_GRAY, corner_radius=CARD_RADIUS)
+        self.closed_scroll.pack(expand=True, fill="both", padx=SPACING_MD, pady=SPACING_MD, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.after(500, self.refresh_trades)
 
     def set_status(self, status):
@@ -228,7 +258,15 @@ class DashboardFrame(ctk.CTkFrame):
         self.after(2000, self.refresh_summary)
 
     def refresh_trades(self):
-        open_trades, closed_trades = self.get_trades()
+        open_trades = [t for t in getattr(self.master.session, 'tokens', {}).values() if not t.get('sold', False)]
+        for trade in open_trades:
+            pnl = None
+            buy_price = trade.get('buy_price_usd')
+            cur_price = trade.get('price_usd')
+            if buy_price and cur_price:
+                pnl = (cur_price - buy_price) / buy_price * 100
+            # Display trade info, PnL, and a Sell button
+            # ctk.CTkButton(..., command=lambda addr=trade['address']: self.master.manual_sell(addr))
         # Clear previous widgets
         for widget in self.open_scroll.winfo_children():
             widget.destroy()
@@ -237,39 +275,39 @@ class DashboardFrame(ctk.CTkFrame):
         # Modern card for each open trade
         if open_trades:
             for trade in open_trades:
-                card = ctk.CTkFrame(self.open_scroll, fg_color=TURBO_BLACK, corner_radius=8)
-                card.pack(fill="x", pady=6, padx=4)
+                card = ctk.CTkFrame(self.open_scroll, fg_color=TURBO_BLACK, corner_radius=CARD_RADIUS)
+                card.pack(fill="x", pady=SPACING_SM, padx=SPACING_SM, ipadx=SPACING_MD, ipady=SPACING_MD)
                 name = trade.get('name', 'N/A')
                 symbol = trade.get('symbol', 'N/A')
                 buy_price = trade.get('buy_price_usd', 0)
                 cur_price = trade.get('price_usd', 0)
                 pnl = ((cur_price - buy_price) / buy_price * 100) if buy_price else 0
                 status = "HOLDING" if not trade.get('sold') else "SOLD"
-                ctk.CTkLabel(card, text=f"{name} ({symbol})", font=("Montserrat", 15, "bold"), text_color=TURBO_CYAN, anchor="w").pack(anchor="w", padx=8, pady=(4,0))
-                ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Cur: ${cur_price:.6f}", font=("Montserrat", 12), text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=8)
-                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=("Montserrat", 12, "bold"), text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=8)
-                ctk.CTkLabel(card, text=f"Status: {status}", font=("Montserrat", 11), text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=8, pady=(0,4))
+                ctk.CTkLabel(card, text=f"{name} ({symbol})", font=FONT_SUBHEADER, text_color=TURBO_CYAN, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
+                ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Cur: ${cur_price:.6f}", font=FONT_BODY, text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"Status: {status}", font=FONT_BODY, text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
                 # Sell button
-                sell_btn = ctk.CTkButton(card, text="Sell", fg_color=TURBO_ERROR, hover_color=TURBO_PURPLE, text_color=TURBO_WHITE, width=80, height=28, corner_radius=8, font=("Montserrat", 12, "bold"), command=lambda addr=trade.get('address'): self.handle_manual_sell(addr))
-                sell_btn.pack(anchor="e", padx=8, pady=(0,6))
+                sell_btn = ctk.CTkButton(card, text="Sell", fg_color=TURBO_ERROR, hover_color=TURBO_PURPLE, text_color=TURBO_WHITE, width=BTN_WIDTH, height=BTN_HEIGHT, corner_radius=BTN_RADIUS, font=FONT_BODY, command=lambda addr=trade.get('address'): self.master.manual_sell(addr))
+                sell_btn.pack(anchor="e", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
         else:
-            ctk.CTkLabel(self.open_scroll, text="No open trades.", font=("Montserrat", 13, "italic"), text_color=TURBO_GRAY).pack(pady=20)
+            ctk.CTkLabel(self.open_scroll, text="No open trades.", font=FONT_BODY, text_color=TURBO_GRAY).pack(pady=SPACING_MD, padx=SPACING_MD)
         # Modern card for each closed trade
         if closed_trades:
             for trade in closed_trades:
-                card = ctk.CTkFrame(self.closed_scroll, fg_color=TURBO_BLACK, corner_radius=8)
-                card.pack(fill="x", pady=6, padx=4)
+                card = ctk.CTkFrame(self.closed_scroll, fg_color=TURBO_BLACK, corner_radius=CARD_RADIUS)
+                card.pack(fill="x", pady=SPACING_SM, padx=SPACING_SM, ipadx=SPACING_MD, ipady=SPACING_MD)
                 name = trade.get('name', 'N/A')
                 symbol = trade.get('symbol', 'N/A')
                 buy_price = trade.get('buy_price_usd', 0)
                 sell_price = trade.get('sell_price_usd', 0)
                 pnl = ((sell_price - buy_price) / buy_price * 100) if buy_price else 0
-                ctk.CTkLabel(card, text=f"{name} ({symbol})", font=("Montserrat", 15, "bold"), text_color=TURBO_PURPLE, anchor="w").pack(anchor="w", padx=8, pady=(4,0))
-                ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Sell: ${sell_price:.6f}", font=("Montserrat", 12), text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=8)
-                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=("Montserrat", 12, "bold"), text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=8)
-                ctk.CTkLabel(card, text=f"Status: SOLD", font=("Montserrat", 11), text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=8, pady=(0,4))
+                ctk.CTkLabel(card, text=f"{name} ({symbol})", font=FONT_SUBHEADER, text_color=TURBO_PURPLE, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
+                ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Sell: ${sell_price:.6f}", font=FONT_BODY, text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"Status: SOLD", font=FONT_BODY, text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
         else:
-            ctk.CTkLabel(self.closed_scroll, text="No closed trades.", font=("Montserrat", 13, "italic"), text_color=TURBO_GRAY).pack(pady=20)
+            ctk.CTkLabel(self.closed_scroll, text="No closed trades.", font=FONT_BODY, text_color=TURBO_GRAY).pack(pady=SPACING_MD, padx=SPACING_MD)
         # Schedule next refresh
         self.after(2000, self.refresh_trades)
 
@@ -281,14 +319,14 @@ class LogFrame(ctk.CTkFrame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         self.configure(fg_color=TURBO_BLACK)
-        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=14)
-        self.panel.pack(expand=True, fill="both", pady=40, padx=40)
+        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.panel.pack(expand=True, fill="both", pady=SPACING_LG, padx=SPACING_XL, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.panel.pack_propagate(False)
         self.textbox = ctk.CTkTextbox(self.panel, wrap="word", font=("Consolas", 12), fg_color=TURBO_DARK_GRAY, text_color=TURBO_CYAN)
-        self.textbox.pack(fill="both", expand=True, padx=10, pady=10)
+        self.textbox.pack(fill="both", expand=True, padx=SPACING_MD, pady=SPACING_MD, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.textbox.configure(state="disabled")
         clear_btn = ctk.CTkButton(self.panel, text="Clear Log", command=self.clear_log, **button_kwargs)
-        clear_btn.pack(pady=(0, 10))
+        clear_btn.pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
         # Buffered log queue
         self._queue = deque()
         self.after(100, self._flush)
@@ -319,233 +357,203 @@ class PlaceholderFrame(ctk.CTkFrame):
         label.pack(expand=True)
 
 class SettingsFrame(ctk.CTkFrame):
-    def __init__(self, master, get_bot_status, on_apply, *args, **kwargs):
+    def __init__(self, master, get_bot_status, on_settings_apply, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
-        self.configure(fg_color=TURBO_BLACK)
         self.get_bot_status = get_bot_status
-        self.on_apply = on_apply
-        self.vars = {}
-        # Modern, full-width panel
-        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=14)
-        self.panel.pack(expand=True, fill="both", pady=40, padx=40)
-        self.panel.pack_propagate(False)
-        self.panel.grid_columnconfigure(1, weight=1)
-        row = 0
-        # Wallet Type
-        ctk.CTkLabel(self.panel, text="Wallet Type:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['wallet_type'] = ctk.StringVar(value="private")
-        wallet_type_menu = ctk.CTkOptionMenu(self.panel, variable=self.vars['wallet_type'], values=["private", "seed"], command=self._toggle_wallet_input)
-        wallet_type_menu.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Private Key
-        self.priv_label = ctk.CTkLabel(self.panel, text="Private Key:", **label_kwargs)
-        self.priv_label.grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['private_key'] = ctk.StringVar()
-        self.priv_entry = ctk.CTkEntry(self.panel, textvariable=self.vars['private_key'], show="*", **entry_kwargs)
-        self.priv_entry.grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        # Seed Phrase
-        self.seed_label = ctk.CTkLabel(self.panel, text="Seed Phrase:", **label_kwargs)
-        self.vars['seed_phrase'] = ctk.StringVar()
-        self.seed_entry = ctk.CTkEntry(self.panel, textvariable=self.vars['seed_phrase'], show="*", **entry_kwargs)
-        row += 1
-        # RPC URL
-        ctk.CTkLabel(self.panel, text="RPC URL:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['rpc_url'] = ctk.StringVar(value=SOLANA_MAINNET_RPC)
-        ctk.CTkEntry(self.panel, textvariable=self.vars['rpc_url'], **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Position Size
-        ctk.CTkLabel(self.panel, text="Position Size (USD):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['position_size'] = ctk.StringVar(value="2.0")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['position_size'], placeholder_text="e.g. 2.0", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Take Profit
-        ctk.CTkLabel(self.panel, text="Take Profit (%):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['take_profit'] = ctk.StringVar(value="30")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['take_profit'], placeholder_text="e.g. 30", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Stop Loss
-        ctk.CTkLabel(self.panel, text="Stop Loss (%):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['stop_loss'] = ctk.StringVar(value="15")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['stop_loss'], placeholder_text="e.g. 15", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Min Liquidity
-        ctk.CTkLabel(self.panel, text="Min Liquidity (USD):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_liquidity'] = ctk.StringVar(value="10000.0")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_liquidity'], placeholder_text="e.g. 10000", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Min Volume 5m
-        ctk.CTkLabel(self.panel, text="Min Volume (5m, USD):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_volume_5m_usd'] = ctk.StringVar(value="2000.0")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_volume_5m_usd'], placeholder_text="e.g. 2000", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Max Price
-        ctk.CTkLabel(self.panel, text="Max Price (USD):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['max_price'] = ctk.StringVar(value="1.0")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['max_price'], placeholder_text="e.g. 1.0", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Min Pair Age
-        ctk.CTkLabel(self.panel, text="Min Pair Age (s):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_pair_age'] = ctk.StringVar(value="60")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_pair_age'], placeholder_text="e.g. 60", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Max Pair Age
-        ctk.CTkLabel(self.panel, text="Max Pair Age (s):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['max_pair_age'] = ctk.StringVar(value="1800")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['max_pair_age'], placeholder_text="e.g. 1800", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Min Buys 5m
-        ctk.CTkLabel(self.panel, text="Min Buys (5m):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_buys_5m'] = ctk.StringVar(value="20")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_buys_5m'], placeholder_text="e.g. 20", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Min Buy/Sell Ratio
-        ctk.CTkLabel(self.panel, text="Min Buy/Sell Ratio:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_buy_tx_ratio'] = ctk.StringVar(value="1.05")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_buy_tx_ratio'], placeholder_text="e.g. 1.05", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Duration
-        ctk.CTkLabel(self.panel, text="Session Duration (min):", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['duration'] = ctk.StringVar(value="120")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['duration'], placeholder_text="e.g. 120", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # --- Advanced Filters ---
-        # Require Socials
-        ctk.CTkLabel(self.panel, text="Require Socials:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['require_socials'] = ctk.BooleanVar()
-        ctk.CTkCheckBox(self.panel, variable=self.vars['require_socials'], text="Enable", **button_kwargs).grid(row=row, column=1, sticky="w", padx=10, pady=2)
-        row += 1
-        # Min % Burned
-        ctk.CTkLabel(self.panel, text="Min % Burned:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['min_percent_burned'] = ctk.StringVar(value="0")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['min_percent_burned'], placeholder_text="e.g. 0", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Require Immutable Metadata
-        ctk.CTkLabel(self.panel, text="Require Immutable Metadata:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['require_immutable'] = ctk.BooleanVar()
-        ctk.CTkCheckBox(self.panel, variable=self.vars['require_immutable'], text="Enable", **button_kwargs).grid(row=row, column=1, sticky="w", padx=10, pady=2)
-        row += 1
-        # Max % in Top 5 Holders
-        ctk.CTkLabel(self.panel, text="Max % in Top 5 Holders:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['max_percent_top_holders'] = ctk.StringVar(value="100")
-        ctk.CTkEntry(self.panel, textvariable=self.vars['max_percent_top_holders'], placeholder_text="e.g. 100", **entry_kwargs).grid(row=row, column=1, sticky="ew", padx=10, pady=2)
-        row += 1
-        # Block Known Risky Wallets
-        ctk.CTkLabel(self.panel, text="Block Known Risky Wallets:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['block_risky_wallets'] = ctk.BooleanVar()
-        ctk.CTkCheckBox(self.panel, variable=self.vars['block_risky_wallets'], text="Enable", **button_kwargs).grid(row=row, column=1, sticky="w", padx=10, pady=2)
-        row += 1
-        # Simulation Mode
-        ctk.CTkLabel(self.panel, text="Simulation Mode:", **label_kwargs).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-        self.vars['simulation'] = ctk.BooleanVar()
-        ctk.CTkCheckBox(self.panel, variable=self.vars['simulation'], text="Enable", **button_kwargs).grid(row=row, column=1, sticky="w", padx=10, pady=2)
-        row += 1
-        # Save/Apply Button
-        self.apply_btn = ctk.CTkButton(self.panel, text="Save / Apply", command=self._on_apply, **button_kwargs)
-        self.apply_btn.grid(row=row, column=0, columnspan=2, pady=(10, 5))
-        self.panel.grid_columnconfigure(1, weight=1)
-        self._toggle_wallet_input(self.vars['wallet_type'].get())
+        self.on_settings_apply = on_settings_apply
+
+        # --- Mode Selection ---
+        self.mode_var = ctk.StringVar(value="simulation")
+        ctk.CTkLabel(self, text="Mode:", font=FONT_SUBHEADER).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+
+        # --- SCROLLABLE FRAME for settings ---
+        self.scrollable = ctk.CTkScrollableFrame(self, corner_radius=CARD_RADIUS)
+        self.scrollable.pack(expand=True, fill="both", padx=SPACING_MD, pady=(SPACING_SM, SPACING_MD), ipadx=SPACING_MD, ipady=SPACING_MD)
+
+        # Now, instead of packing widgets to self, pack them to self.scrollable
+        mode_frame = ctk.CTkFrame(self.scrollable, fg_color="transparent")
+        mode_frame.pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        ctk.CTkRadioButton(mode_frame, text="Simulation", variable=self.mode_var, value="simulation").pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        ctk.CTkRadioButton(mode_frame, text="Real Wallet", variable=self.mode_var, value="real").pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+
+        # --- Wallet Settings (only for real mode) ---
+        self.wallet_frame = ctk.CTkFrame(self.scrollable, corner_radius=CARD_RADIUS)
+        ctk.CTkLabel(self.wallet_frame, text="Wallet Settings", font=FONT_SUBHEADER).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.wallet_type_var = ctk.StringVar(value="private_key")
+        ctk.CTkLabel(self.wallet_frame, text="Wallet Type").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        wallet_type_frame = ctk.CTkFrame(self.wallet_frame, fg_color="transparent")
+        wallet_type_frame.pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        ctk.CTkRadioButton(wallet_type_frame, text="Private Key", variable=self.wallet_type_var, value="private_key").pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        ctk.CTkRadioButton(wallet_type_frame, text="Seed Phrase", variable=self.wallet_type_var, value="seed_phrase").pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.wallet_secret_var = ctk.StringVar()
+        ctk.CTkLabel(self.wallet_frame, text="Private Key / Seed Phrase").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(self.wallet_frame, textvariable=self.wallet_secret_var, width=300, show="*", corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+
+        # --- Trading Settings (shared) ---
+        trading_frame = ctk.CTkFrame(self.scrollable, corner_radius=CARD_RADIUS)
+        trading_frame.pack(fill="x", padx=SPACING_MD, pady=(SPACING_SM, SPACING_MD), ipadx=SPACING_MD, ipady=SPACING_MD)
+        ctk.CTkLabel(trading_frame, text="Trading Settings", font=FONT_SUBHEADER).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.take_profit_var = ctk.DoubleVar(value=2.0)
+        ctk.CTkLabel(trading_frame, text="Take Profit (%)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.take_profit_var, width=BTN_WIDTH, placeholder_text="200%", corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.stop_loss_var = ctk.DoubleVar(value=0.5)
+        ctk.CTkLabel(trading_frame, text="Stop Loss (%)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.stop_loss_var, width=BTN_WIDTH, placeholder_text="50%", corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_liquidity_var = ctk.DoubleVar(value=1000)
+        ctk.CTkLabel(trading_frame, text="Min Liquidity (USD)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_liquidity_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_5m_volume_usd_var = ctk.DoubleVar(value=5000)
+        ctk.CTkLabel(trading_frame, text="Min 5m Volume (USD)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_5m_volume_usd_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.max_price_var = ctk.DoubleVar(value=0.01)
+        ctk.CTkLabel(trading_frame, text="Max Price (USD)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.max_price_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_pair_age_var = ctk.DoubleVar(value=600)
+        ctk.CTkLabel(trading_frame, text="Min Pair Age (s)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_pair_age_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.max_pair_age_var = ctk.DoubleVar(value=86400)
+        ctk.CTkLabel(trading_frame, text="Max Pair Age (s)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.max_pair_age_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_buys_5m_var = ctk.IntVar(value=10)
+        ctk.CTkLabel(trading_frame, text="Min Buys (5m)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_buys_5m_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_trx_ratio_var = ctk.DoubleVar(value=1.5)
+        ctk.CTkLabel(trading_frame, text="Min Tx Ratio").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_trx_ratio_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.duration_var = ctk.IntVar(value=60)
+        ctk.CTkLabel(trading_frame, text="Duration (min)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.duration_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.min_percent_burned_var = ctk.DoubleVar(value=10.0)
+        ctk.CTkLabel(trading_frame, text="Min % Burned").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.min_percent_burned_var, width=BTN_WIDTH, placeholder_text="10%", corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.require_immutable_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(trading_frame, text="Require Immutable", variable=self.require_immutable_var).pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        self.max_percent_top_holders_var = ctk.DoubleVar(value=0.0)
+        ctk.CTkLabel(trading_frame, text="Max % Top Holders").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.max_percent_top_holders_var, width=BTN_WIDTH, placeholder_text="5%", corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        self.block_risky_wallets_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(trading_frame, text="Block Risky Wallets", variable=self.block_risky_wallets_var).pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        self.position_size_var = ctk.DoubleVar(value=50.0)
+        ctk.CTkLabel(trading_frame, text="Position Size (USD)").pack(anchor="w", pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(trading_frame, textvariable=self.position_size_var, width=BTN_WIDTH, corner_radius=INPUT_RADIUS).pack(anchor="w", pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+
+        # --- Save Button ---
+        ctk.CTkButton(self, text="Save Changes", command=self.save_settings, corner_radius=BTN_RADIUS, font=FONT_BODY).pack(pady=SPACING_MD, padx=SPACING_MD)
+
+        # --- Mode Change Handler ---
+        self.mode_var.trace_add("write", self.on_mode_change)
+        self.on_mode_change()
         self.load_settings()
-        self.after(1000, self._update_state)
 
-    def _toggle_wallet_input(self, wallet_type):
-        if wallet_type == "private":
-            self.priv_label.grid()
-            self.priv_entry.grid()
-            self.seed_label.grid_remove()
-            self.seed_entry.grid_remove()
+    def on_mode_change(self, *args):
+        # Show/hide wallet settings based on mode
+        if self.mode_var.get() == "real":
+            self.wallet_frame.pack(fill="x", padx=SPACING_MD, pady=SPACING_SM, ipadx=SPACING_MD, ipady=SPACING_SM)
         else:
-            self.priv_label.grid_remove()
-            self.priv_entry.grid_remove()
-            self.seed_label.grid(row=2, column=0, sticky="w", padx=10, pady=2)
-            self.seed_entry.grid(row=2, column=1, sticky="ew", padx=10, pady=2)
+            self.wallet_frame.pack_forget()
 
-    def _update_state(self):
-        running = self.get_bot_status() == "Running"
-        state = "disabled" if running else "normal"
-        for var in self.vars.values():
-            if hasattr(var, 'set'):
-                pass  # keep variable
-        for widget in self.winfo_children():
-            if isinstance(widget, (ctk.CTkEntry, ctk.CTkOptionMenu, ctk.CTkCheckBox)):
-                widget.configure(state=state)
-        self.apply_btn.configure(state=state)
-        self.after(1000, self._update_state)
+    def save_settings(self):
+        # Gather all settings and call the callback
+        settings = {
+            "mode": self.mode_var.get(),
+            "wallet_type": self.wallet_type_var.get() if self.mode_var.get() == "real" else None,
+            "wallet_secret": self.wallet_secret_var.get() if self.mode_var.get() == "real" else None,
+            "take_profit": self.take_profit_var.get(),
+            "stop_loss": self.stop_loss_var.get(),
+            "min_liquidity": self.min_liquidity_var.get(),
+            "min_5m_volume_usd": self.min_5m_volume_usd_var.get(),
+            "max_price": self.max_price_var.get(),
+            "min_pair_age": self.min_pair_age_var.get(),
+            "max_pair_age": self.max_pair_age_var.get(),
+            "min_buys_5m": self.min_buys_5m_var.get(),
+            "min_trx_ratio": self.min_trx_ratio_var.get(),
+            "duration": self.duration_var.get(),
+            "min_percent_burned": self.min_percent_burned_var.get(),
+            "require_immutable": self.require_immutable_var.get(),
+            "max_percent_top_holders": self.max_percent_top_holders_var.get(),
+            "block_risky_wallets": self.block_risky_wallets_var.get(),
+            "position_size": self.position_size_var.get(),
+        }
+        # Save to file
+        with open("settings.json", "w") as f:
+            json.dump(settings, f, indent=2)
+        # Map position_size to backend (POSITION_SIZE_USD)
+        if "position_size" in settings:
+            try:
+                settings["position_size"] = float(settings["position_size"])
+            except Exception:
+                pass  # Leave as is if conversion fails
+        self.on_settings_apply(settings)
 
-    def _on_apply(self):
-        self.save_settings()
-        self.on_apply(self.get_settings())
+    def import_wallet(self):
+        # TODO: Implement wallet import dialog
+        pass
+
+    def export_wallet(self):
+        # TODO: Implement wallet export dialog
+        pass
 
     def get_settings(self):
+        # Gather all settings and return as a dictionary (same as in save_settings)
         return {
-            "wallet_type": self.vars['wallet_type'].get(),
-            "private_key": self.vars['private_key'].get(),
-            "seed_phrase": self.vars['seed_phrase'].get(),
-            "rpc_url": self.vars['rpc_url'].get(),
-            "position_size": float(self.vars['position_size'].get()),
-            "take_profit": float(self.vars['take_profit'].get()),
-            "stop_loss": float(self.vars['stop_loss'].get()),
-            "min_liquidity": float(self.vars['min_liquidity'].get()),
-            "min_volume_5m_usd": float(self.vars['min_volume_5m_usd'].get()),
-            "max_price": float(self.vars['max_price'].get()),
-            "min_pair_age": int(self.vars['min_pair_age'].get()),
-            "max_pair_age": int(self.vars['max_pair_age'].get()),
-            "min_buys_5m": int(self.vars['min_buys_5m'].get()),
-            "min_buy_tx_ratio": float(self.vars['min_buy_tx_ratio'].get()),
-            "duration": int(self.vars['duration'].get()),
-            "require_socials": self.vars['require_socials'].get(),
-            "min_percent_burned": float(self.vars['min_percent_burned'].get()),
-            "require_immutable": self.vars['require_immutable'].get(),
-            "max_percent_top_holders": float(self.vars['max_percent_top_holders'].get()),
-            "block_risky_wallets": self.vars['block_risky_wallets'].get(),
-            "simulation": self.vars['simulation'].get(),
+            "mode": self.mode_var.get(),
+            "wallet_type": self.wallet_type_var.get() if self.mode_var.get() == "real" else None,
+            "wallet_secret": self.wallet_secret_var.get() if self.mode_var.get() == "real" else None,
+            "take_profit": self.take_profit_var.get(),
+            "stop_loss": self.stop_loss_var.get(),
+            "min_liquidity": self.min_liquidity_var.get(),
+            "min_5m_volume_usd": self.min_5m_volume_usd_var.get(),
+            "max_price": self.max_price_var.get(),
+            "min_pair_age": self.min_pair_age_var.get(),
+            "max_pair_age": self.max_pair_age_var.get(),
+            "min_buys_5m": self.min_buys_5m_var.get(),
+            "min_trx_ratio": self.min_trx_ratio_var.get(),
+            "duration": self.duration_var.get(),
+            "min_percent_burned": self.min_percent_burned_var.get(),
+            "require_immutable": self.require_immutable_var.get(),
+            "max_percent_top_holders": self.max_percent_top_holders_var.get(),
+            "block_risky_wallets": self.block_risky_wallets_var.get(),
+            "position_size": self.position_size_var.get(),
         }
 
     def load_settings(self):
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r") as f:
-                data = json.load(f)
-            for k, v in data.items():
-                if k in self.vars:
-                    if isinstance(self.vars[k], ctk.BooleanVar):
-                        self.vars[k].set(bool(v))
-                    else:
-                        self.vars[k].set(v)
-        # If no value in settings, set default for RPC URL
-        if not self.vars['rpc_url'].get():
-            self.vars['rpc_url'].set(SOLANA_MAINNET_RPC)
-        if not self.vars['min_buy_tx_ratio'].get():
-            self.vars['min_buy_tx_ratio'].set("1.05")
-        if not self.vars['min_percent_burned'].get():
-            self.vars['min_percent_burned'].set("0")
-        if not self.vars['max_percent_top_holders'].get():
-            self.vars['max_percent_top_holders'].set("100")
-
-    def save_settings(self):
-        data = self.get_settings()
-        # Preserve the license key if present
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r") as f:
-                existing = json.load(f)
-            if "license_key" in existing:
-                data["license_key"] = existing["license_key"]
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        if os.path.exists("settings.json"):
+            with open("settings.json", "r") as f:
+                settings = json.load(f)
+            self.mode_var.set(settings.get("mode", "simulation"))
+            self.wallet_type_var.set(settings.get("wallet_type", "private_key"))
+            self.wallet_secret_var.set(settings.get("wallet_secret", ""))
+            self.take_profit_var.set(settings.get("take_profit", 2.0))
+            self.stop_loss_var.set(settings.get("stop_loss", 0.5))
+            self.min_liquidity_var.set(settings.get("min_liquidity", 1000))
+            self.min_5m_volume_usd_var.set(settings.get("min_5m_volume_usd", 5000))
+            self.max_price_var.set(settings.get("max_price", 0.01))
+            self.min_pair_age_var.set(settings.get("min_pair_age", 600))
+            self.max_pair_age_var.set(settings.get("max_pair_age", 86400))
+            self.min_buys_5m_var.set(settings.get("min_buys_5m", 10))
+            self.min_trx_ratio_var.set(settings.get("min_trx_ratio", 1.5))
+            self.duration_var.set(settings.get("duration", 60))
+            self.min_percent_burned_var.set(settings.get("min_percent_burned", 10.0))
+            self.require_immutable_var.set(settings.get("require_immutable", False))
+            self.max_percent_top_holders_var.set(settings.get("max_percent_top_holders", 0.0))
+            self.block_risky_wallets_var.set(settings.get("block_risky_wallets", False))
+            self.position_size_var.set(settings.get("position_size", 50.0))
 
 class LicenseFrame(ctk.CTkFrame):
     def __init__(self, master, get_license_status, on_activate, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         self.configure(fg_color=TURBO_BLACK)
-        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=14)
-        self.panel.pack(expand=True, fill="both", pady=40, padx=40)
+        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.panel.pack(expand=True, fill="both", pady=SPACING_LG, padx=SPACING_XL, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.panel.pack_propagate(False)
         label = ctk.CTkLabel(self.panel, text="Enter License Key", **label_kwargs)
-        label.pack(pady=(40, 10))
-        self.entry = ctk.CTkEntry(self.panel, **entry_kwargs)
-        self.entry.pack(pady=10)
+        label.pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
+        self.entry = ctk.CTkEntry(self.panel, **entry_kwargs, corner_radius=INPUT_RADIUS)
+        self.entry.pack(pady=SPACING_SM, padx=SPACING_MD)
         self.activate_btn = ctk.CTkButton(self.panel, text="Activate", **button_kwargs, command=self._activate)
-        self.activate_btn.pack(pady=10)
-        self.status_label = ctk.CTkLabel(self.panel, text="", font=("Montserrat", 14, "bold"), fg_color="transparent")
-        self.status_label.pack(pady=10)
+        self.activate_btn.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.status_label = ctk.CTkLabel(self.panel, text="", font=FONT_SUBHEADER, fg_color="transparent")
+        self.status_label.pack(pady=SPACING_SM, padx=SPACING_MD)
         self.get_license_status = get_license_status
         self.on_activate = on_activate
         # Show status on startup
@@ -570,8 +578,8 @@ class AboutFrame(ctk.CTkFrame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         self.configure(fg_color=TURBO_BLACK)
-        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=14)
-        self.panel.pack(expand=True, fill="both", pady=40, padx=40)
+        self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
+        self.panel.pack(expand=True, fill="both", pady=SPACING_LG, padx=SPACING_XL, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.panel.pack_propagate(False)
         try:
             from PIL import Image
@@ -579,21 +587,21 @@ class AboutFrame(ctk.CTkFrame):
             if os.path.exists(logo_path):
                 img = Image.open(logo_path).convert("RGBA").resize((80, 80))
                 self.logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(80, 80))
-                ctk.CTkLabel(self.panel, image=self.logo_img, text="", fg_color="transparent").pack(pady=(30, 10))
+                ctk.CTkLabel(self.panel, image=self.logo_img, text="", fg_color="transparent").pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
             else:
-                ctk.CTkLabel(self.panel, text="[Turbo Logo]", **label_kwargs).pack(pady=(30, 10))
+                ctk.CTkLabel(self.panel, text="[Turbo Logo]", **label_kwargs).pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
         except Exception as e:
             print("AboutFrame logo load error:", e)
-            ctk.CTkLabel(self.panel, text="[Turbo Logo]", **label_kwargs).pack(pady=(30, 10))
-        ctk.CTkLabel(self.panel, text=APP_NAME, **label_kwargs).pack(pady=(0, 5))
-        ctk.CTkLabel(self.panel, text=f"Version {APP_VERSION}", **label_kwargs).pack(pady=(0, 10))
-        ctk.CTkLabel(self.panel, text=f"by {COMPANY}", **label_kwargs).pack(pady=(0, 10))
-        ctk.CTkLabel(self.panel, text=f"Contact: {SUPPORT_EMAIL}", **label_kwargs).pack(pady=(0, 2))
+            ctk.CTkLabel(self.panel, text="[Turbo Logo]", **label_kwargs).pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text=APP_NAME, **label_kwargs).pack(pady=(SPACING_SM, SPACING_SM), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text=f"Version {APP_VERSION}", **label_kwargs).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text=f"by {COMPANY}", **label_kwargs).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text=f"Contact: {SUPPORT_EMAIL}", **label_kwargs).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
         label_kwargs_blue = label_kwargs.copy()
         label_kwargs_blue["text_color"] = TURBO_CYAN
-        ctk.CTkLabel(self.panel, text=f"Website: {WEBSITE}", **label_kwargs_blue).pack(pady=(0, 2))
-        ctk.CTkLabel(self.panel, text=f"Telegram: {TELEGRAM}", **label_kwargs).pack(pady=(0, 2))
-        ctk.CTkLabel(self.panel, text="\u00A9 2024 Turbo. All rights reserved.", **label_kwargs).pack(pady=(20, 0))
+        ctk.CTkLabel(self.panel, text=f"Website: {WEBSITE}", **label_kwargs_blue).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text=f"Telegram: {TELEGRAM}", **label_kwargs).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
+        ctk.CTkLabel(self.panel, text="\u00A9 2024 Turbo. All rights reserved.", **label_kwargs).pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
 
 class ManualBuyFrame(ctk.CTkFrame):
     def __init__(self, master, fetch_token_info_callback, manual_buy_callback, *args, **kwargs):
@@ -601,19 +609,19 @@ class ManualBuyFrame(ctk.CTkFrame):
         self.fetch_token_info_callback = fetch_token_info_callback
         self.manual_buy_callback = manual_buy_callback
         self.address_var = ctk.StringVar()
-        ctk.CTkLabel(self, text="Paste Token Address:").pack(pady=10)
-        ctk.CTkEntry(self, textvariable=self.address_var, width=400).pack(pady=5)
-        ctk.CTkButton(self, text="Fetch Info", command=self.fetch_info).pack(pady=5)
-        self.info_label = ctk.CTkLabel(self, text="Token info will appear here.")
-        self.info_label.pack(pady=10)
-        self.buy_button = ctk.CTkButton(self, text="Buy", command=self.buy_token)
-        self.buy_button.pack(pady=5)
-        self.warning_label = ctk.CTkLabel(self, text="Warning: Manual buy ignores all filters and settings. Proceed with caution!", text_color="orange")
-        self.warning_label.pack(pady=5)
-        self.log_label = ctk.CTkLabel(self, text="", wraplength=500)
-        self.log_label.pack(pady=10)
-        self.retry_button = ctk.CTkButton(self, text="Retry Buy", command=self.buy_token)
-        self.retry_button.pack(pady=5)
+        ctk.CTkLabel(self, text="Paste Token Address:").pack(pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkEntry(self, textvariable=self.address_var, width=400, corner_radius=INPUT_RADIUS).pack(pady=SPACING_SM, padx=SPACING_MD)
+        ctk.CTkButton(self, text="Fetch Info", command=self.fetch_info, corner_radius=BTN_RADIUS, font=FONT_BODY).pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.info_label = ctk.CTkLabel(self, text="Token info will appear here.", font=FONT_BODY, text_color=TURBO_WHITE)
+        self.info_label.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.buy_button = ctk.CTkButton(self, text="Buy", command=self.buy_token, corner_radius=BTN_RADIUS, font=FONT_BODY)
+        self.buy_button.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.warning_label = ctk.CTkLabel(self, text="Warning: Manual buy ignores all filters and settings. Proceed with caution!", text_color="orange", font=FONT_BODY)
+        self.warning_label.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.log_label = ctk.CTkLabel(self, text="", wraplength=500, font=FONT_BODY, text_color=TURBO_WHITE)
+        self.log_label.pack(pady=SPACING_SM, padx=SPACING_MD)
+        self.retry_button = ctk.CTkButton(self, text="Retry Buy", command=self.buy_token, corner_radius=BTN_RADIUS, font=FONT_BODY)
+        self.retry_button.pack(pady=SPACING_SM, padx=SPACING_MD)
         self.retry_button.pack_forget()  # Hide by default
         self.token_info = None
     def fetch_info(self):
@@ -693,13 +701,13 @@ class ManualBuyFrame(ctk.CTkFrame):
                     "This may be a temporary issue with the data provider or the token is not currently tradable.\n"
                     "Please verify the token address, check on Dexscreener, or try again in a few minutes."
                 ))
-                self.retry_button.pack(pady=5)
+                self.retry_button.pack(pady=SPACING_SM, padx=SPACING_MD)
             elif not result:
                 self.log_label.configure(text=(
                     "Token is tradable, but the buy failed.\n"
                     "Please check your wallet balance, network status, or try again."
                 ))
-                self.retry_button.pack(pady=5)
+                self.retry_button.pack(pady=SPACING_SM, padx=SPACING_MD)
             else:
                 self.log_label.configure(text=message)
                 self.retry_button.pack_forget()
@@ -821,6 +829,27 @@ class MainApp(ctk.CTk):
         settings = getattr(self, 'current_settings', None)
         if settings is None:
             settings = self.settings_frame.get_settings()
+        # Map GUI mode to backend simulation argument
+        if "mode" in settings:
+            settings["simulation"] = (settings["mode"] != "real")  # True for simulation, False for real wallet
+        # Map wallet_type and wallet_secret to backend expected fields
+        if settings.get("mode") == "real":
+            wallet_type = settings.get("wallet_type")
+            wallet_secret = settings.get("wallet_secret")
+            if wallet_type == "private_key":
+                settings["wallet_type"] = "private"
+                settings["private_key"] = wallet_secret
+            elif wallet_type == "seed_phrase":
+                settings["wallet_type"] = "seed"
+                settings["seed_phrase"] = wallet_secret
+            if "wallet_secret" in settings:
+                del settings["wallet_secret"]
+        # Map position_size to backend (POSITION_SIZE_USD)
+        if "position_size" in settings:
+            try:
+                settings["position_size"] = float(settings["position_size"])
+            except Exception:
+                pass  # Leave as is if conversion fails
         self.session = SniperSession(
             log_callback=self.log_callback,
             status_callback=self.status_callback,
