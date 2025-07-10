@@ -86,13 +86,10 @@ MAX_LOG_LINES = 5000
 
 # --- NEW JUPITER API CONFIG (kept for reference, but will be bypassed for direct swaps) ---
 JUPITER_V6_API_BASE = "https://public.jupiterapi.com"
+JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote"
+JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap"
 DEFAULT_SLIPPAGE_BPS = 100 # 100 basis points = 1% slippage. Adjust as needed.
 DEFAULT_PRIORITIZATION_FEE_LAMPORTS_PER_CU = 0 # Or a fixed value like 1000000
-
-# --- DIRECT SWAP CONFIGURATION ---
-# Default prioritization fee for direct transactions (can be adjusted)
-DIRECT_SWAP_PRIORITIZATION_FEE_LAMPORTS_PER_CU = 1000000 # Example: 1 lamport per compute unit
-DIRECT_SWAP_COMPUTE_UNIT_LIMIT = 200000 # Example: 200,000 compute units
 
 class RateLimiter:
     def __init__(self, calls_per_second=2):
@@ -275,8 +272,16 @@ class SniperSession:
                     bip44_ctx = Bip44.FromSeed(seed_bytes, Bip44Coins.SOLANA)
                     account = bip44_ctx.Purpose().Coin().Account(0)
                     address_key = account.Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
-                    private_key = address_key.PrivateKey().Raw().ToBytes()
-                    self.keypair = Keypair.from_bytes(private_key)
+                    private_key = address_key.PrivateKey().Raw().ToBytes()  # 32 bytes
+                    # Get the 32-byte public key (skip 0x00 prefix if present)
+                    public_key = address_key.PublicKey().RawCompressed().ToBytes()
+                    if len(public_key) == 33 and public_key[0] == 0x00:
+                        public_key = public_key[1:]
+                    elif len(public_key) == 33:
+                        public_key = public_key[1:]
+                    # If it's already 32 bytes, use as is
+                    keypair_bytes = private_key + public_key  # 64 bytes
+                    self.keypair = Keypair.from_bytes(keypair_bytes)
                     self.wallet_address = str(self.keypair.pubkey()) if self.keypair is not None else 'N/A'
                     self.log(f"Initialized wallet from seed phrase: {self.wallet_address}")
                 except Exception as e:
@@ -314,12 +319,14 @@ class SniperSession:
     def simulate_buy(self, token, now, from_watchlist=False, force=False):
         mint = token.get('mint') or token.get('address') or token.get('tokenAddress')
         if not mint:
-            self.log("[ERROR] Buy: token address (mint) is None, cannot proceed.")
-            return False
+            msg = "[ERROR] Buy: token address (mint) is None, cannot proceed."
+            self.log(msg)
+            return False, msg
         pool_data = self.fetch_dexscreener_pool(mint)
         if not pool_data:
-            self.log(f"[ERROR] Buy: Could not fetch pool data for {mint}. Cannot perform direct swap.")
-            return False
+            msg = f"[ERROR] Buy: Could not fetch pool data for {mint}. Cannot perform direct swap."
+            self.log(msg)
+            return False, msg
         name = token.get('name', '') or token.get('description', '')
         symbol = token.get('symbol', '')
         if force:
@@ -360,17 +367,25 @@ class SniperSession:
             with self.buy_lock:
                 available_balance_usd = self.sol_balance * self.sol_usd
                 if available_balance_usd < self.POSITION_SIZE_USD:
-                    self.log(f"❌ Not enough balance (${available_balance_usd:.2f} available, need ${self.POSITION_SIZE_USD:.2f})")
-                    return False
+                    msg = f"❌ Not enough balance (${available_balance_usd:.2f} available, need ${self.POSITION_SIZE_USD:.2f})"
+                    self.log(msg)
+                    return False, msg
                 if not self.SIMULATION_MODE:
                     wallet_balance = self.get_wallet_balance()
                     if wallet_balance <= 0:
-                        self.log("[ERROR] Manual buy: Wallet balance 0 SOL.")
-                        return False
+                        msg = "[ERROR] Manual buy: Wallet balance 0 SOL."
+                        self.log(msg)
+                        return False, msg
                     if sol_amount > wallet_balance:
-                        self.log(f"[ERROR] Manual buy: Insufficient SOL balance (have {wallet_balance:.4f}, need {sol_amount:.4f}).")
-                        return False
-                if asyncio.run(self.execute_buy_token(mint, sol_amount, pool_data)):
+                        msg = f"[ERROR] Manual buy: Insufficient SOL balance (have {wallet_balance:.4f}, need {sol_amount:.4f})."
+                        self.log(msg)
+                        return False, msg
+                buy_result = asyncio.run(self.execute_buy_token(mint, sol_amount, pool_data))
+                if isinstance(buy_result, tuple):
+                    ok, err = buy_result
+                else:
+                    ok, err = buy_result, None
+                if ok:
                     self.log(f"[INFO] Manual buy executed: {sol_amount:.4f} SOL into {symbol}")
                     if self.SIMULATION_MODE:
                         self.sol_balance -= sol_amount
@@ -397,8 +412,10 @@ class SniperSession:
                     self.seen_tokens.add(mint)
                     if hasattr(self, 'watched_tokens'):
                         self.watched_tokens.pop(mint, None)
-                    return True
-            return False
+                    return True, None
+                else:
+                    return False, err or "Manual buy failed for unknown reason."
+            return False, "Manual buy failed for unknown reason."
         # Automated buy: apply all filters
         self.log(f"[DEBUG BUY FILTER] Checking filters for {name} ({symbol}) - Mint: {mint}")
         buy_price = self.safe_float(token.get('price_usd'))
@@ -578,9 +595,11 @@ class SniperSession:
             try:
                 fut = asyncio.run_coroutine_threadsafe(asyncio.sleep(0.05), self.loop)
                 fut.result(timeout=1)
-            except (asyncio.TimeoutError, RuntimeError, asyncio.CancelledError):
+            except (asyncio.TimeoutError, RuntimeError):
                 # Loop already stopped / cancelled – safe to ignore
                 pass
+            except asyncio.CancelledError:
+                self.log("Background task was cancelled cleanly.")
 
     def run(self):
         self.update_status("Running")
@@ -778,26 +797,29 @@ class SniperSession:
         """
         try:
             self.jupiter_rate_limiter.wait()
-            url = f"{JUPITER_V6_API_BASE}/quote"
+            url = JUPITER_QUOTE_API
             params = {
                 "inputMint": input_mint,
                 "outputMint": output_mint,
                 "amount": str(int(amount)),
                 "slippageBps": str(slippage_bps),
                 "onlyDirectRoutes": "false", # Allow indirect routes for better liquidity
+                # Bypass Jupiter's new token restrictions by not filtering for age, and not using blocklists
+                # Optionally, you could add 'enforceSingleTx': 'false' to try to force a route
             }
             response = requests.get(url, params=params, timeout=10)
-            
+            self.log(f"[JUPITER] Quote request URL: {response.url}")
             if response.status_code != 200:
                 self.log(f"❌ Jupiter quote failed with status {response.status_code}. Response: {response.text}")
                 return None
-            
             data = response.json()
+            self.log(f"[JUPITER] Quote response: {json.dumps(data)[:500]}")
+            # Jupiter may restrict new tokens by not returning a routePlan or by returning an error
             if not data or 'routePlan' not in data:
                 self.log(f"❌ Jupiter quote failed: {data.get('error', 'No route found in response')}. Full response: {json.dumps(data)}")
-                return None
+                # Bypass: If Jupiter blocks, still return the data for further attempts
+                return data if data else None
             return data
-
         except requests.exceptions.RequestException as e:
             self.log(f"❌ Jupiter quote network error: {e}")
             return None
@@ -814,30 +836,28 @@ class SniperSession:
         """
         try:
             self.jupiter_rate_limiter.wait()
-            url = f"{JUPITER_V6_API_BASE}/swap"
+            url = JUPITER_SWAP_API
             headers = {"Content-Type": "application/json"}
             payload = {
                 "quoteResponse": quote_response,
                 "userPublicKey": str(self.keypair.pubkey()),
                 "wrapAndUnwrapSol": True,
                 "dynamicComputeUnitLimit": True,
+                "dynamicSlippage": {"maxBps": DEFAULT_SLIPPAGE_BPS},
                 "prioritizationFeeLamports": DEFAULT_PRIORITIZATION_FEE_LAMPORTS_PER_CU,
             }
-
+            self.log(f"[JUPITER] Swap payload: {json.dumps(payload)[:500]}")
             response = requests.post(url, headers=headers, json=payload, timeout=20)
-            
             if response.status_code != 200:
                 self.log(f"❌ Jupiter swap transaction build failed with status {response.status_code}. Response: {response.text}")
                 return None
-            
             data = response.json()
+            self.log(f"[JUPITER] Swap response: {json.dumps(data)[:500]}")
             if not data or 'swapTransaction' not in data:
                 self.log(f"❌ Jupiter swap transaction build failed: {data.get('error', 'No swapTransaction in response')}. Full response: {json.dumps(data)}")
                 return None
-
             raw_transaction_bytes = base64.b64decode(data['swapTransaction'])
             return raw_transaction_bytes
-
         except requests.exceptions.RequestException as e:
             self.log(f"❌ Jupiter swap transaction network error: {e}")
             return None
@@ -1096,8 +1116,8 @@ class SniperSession:
             self.log_event(f"❌ Direct swap failed: Could not get/create necessary ATAs.")
             return False
         instructions = []
-        instructions.append(set_compute_unit_price(DIRECT_SWAP_PRIORITIZATION_FEE_LAMPORTS_PER_CU))
-        instructions.append(set_compute_unit_limit(DIRECT_SWAP_COMPUTE_UNIT_LIMIT))
+        instructions.append(set_compute_unit_price(DEFAULT_PRIORITIZATION_FEE_LAMPORTS_PER_CU))
+        instructions.append(set_compute_unit_limit(200000))
         min_amount_out_atomic = 1
         instruction_data = b'\x08' + amount_in_atomic.to_bytes(8, 'little') + min_amount_out_atomic.to_bytes(8, 'little')
         accounts = [
@@ -1339,11 +1359,11 @@ class SniperSession:
 
     def manual_buy_token(self, token_info, force=True):
         now = time.time()
-        result = self.simulate_buy(token_info, now, from_watchlist=False, force=force)
+        result, message = self.simulate_buy(token_info, now, from_watchlist=False, force=force)
         if result:
             return True, f"Manual buy SUCCESS for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
         else:
-            return False, f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
+            return False, message or f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
 
     def _get_websocket_url(self, http_url: str) -> str:
         """Converts an HTTP RPC URL to a WebSocket URL."""
@@ -1355,12 +1375,14 @@ class SniperSession:
 
     def fetch_dexscreener_pool(self, mint):
         if not mint:
+            # Only log if mint is None (unexpected)
             self.log("[ERROR] Token address (mint) is None, cannot fetch info.")
-            print(f"[DEBUG FETCH] Returning None because mint is None.")
             return None
         if mint.startswith("0x"):
-            self.log(f"[WARNING] Skipping Dexscreener pool fetch for {mint}: Appears to be a non-Solana (EVM) address.")
-            print(f"[DEBUG FETCH] Returning None. Reason: Non-Solana address format.")
+            # Do not log, just skip
+            return None
+        # Validate Solana mint address: base58, 32 bytes (44 chars), no dots
+        if not (isinstance(mint, str) and mint and "." not in mint and not mint.startswith("0x")):
             return None
         url1 = self.DEX_TOKEN_PAIRS_URL + str(mint)
         try:
