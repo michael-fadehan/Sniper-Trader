@@ -1,2 +1,3 @@
 flask
 gunicorn 
+git clone https://github.com/kevinheavey/solders.git
