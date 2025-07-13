@@ -182,6 +182,7 @@ class SniperSession:
     DEX_TOKEN_PAIRS_URL = "https://api.dexscreener.com/token-pairs/v1/solana/"
     LOG_FILE = "logs"
     LOG_BACKUP = "logs.old"
+    open_positions_file = "open_positions.json"
 
     def __init__(self, log_callback=None, status_callback=None, **kwargs):
         self.lock = Lock()
@@ -315,6 +316,9 @@ class SniperSession:
             self.sol_balance = 0.0
         if not hasattr(self, 'sol_usd') or self.sol_usd is None:
             self.sol_usd = 1.0
+            
+        # Load any existing open positions
+        self.load_open_positions()
 
     def simulate_buy(self, token, now, from_watchlist=False, force=False):
         mint = token.get('mint') or token.get('address') or token.get('tokenAddress')
@@ -1626,40 +1630,50 @@ class SniperSession:
         name = token['name']
         symbol = token['symbol']
         cur_price = float(self.safe_float(token.get('price_usd')) or 0.0)
-        buy_price_val = self.safe_float(token.get('buy_price_usd'))
-        buy_price = float(buy_price_val) if buy_price_val is not None else 0.0
-        tp_mult = float(self.TAKE_PROFIT_MULT) if self.TAKE_PROFIT_MULT is not None else 0.0
-        sl_mult = float(self.STOP_LOSS_MULT) if self.STOP_LOSS_MULT is not None else 0.0
-        tp = float(buy_price) * float(tp_mult)
-        sl = float(buy_price) * float(sl_mult)
-        if cur_price == 0.0 or buy_price == 0.0:
-            self.log(f"[ERROR] Try sell: No price data for token: {name} ({symbol})")
-            return False
-        self.log(f"[DEBUG] try_sell: buy_price={buy_price}, cur_price={cur_price}, TP={tp}, SL={sl}, TAKE_PROFIT_PCT={self.TAKE_PROFIT_PCT}, STOP_LOSS_PCT= {self.STOP_LOSS_PCT}, force={force}")
-        if not force:
-            if cur_price >= tp:
-                reason = "TAKE_PROFIT"
-            elif cur_price <= sl:
-                reason = "STOP_LOSS"
-            else:
-                return False
-        else:
-            reason = "MANUAL"
-        sell_amt_usd_val = self.safe_float(token.get('amount_left_usd'))
-        sell_amt_usd = float(sell_amt_usd_val) if sell_amt_usd_val is not None else 0.0
-        token_decimals = self._get_token_decimals_from_chain(mint)
-        if token_decimals is None:
-            self.log(f"❌ Sell failed: Could not determine decimals for token {mint}.")
-            return False
-        actual_tokens_to_sell = sell_amt_usd / cur_price if cur_price > 0.0 else 0.0
-        if actual_tokens_to_sell <= 0.0:
-            self.log(f"❌ Sell failed: No tokens to sell for {name} ({symbol}).")
-            return False
-        pool_data = self.fetch_dexscreener_pool(mint)
-        if not pool_data:
-            self.log(f"[ERROR] Sell: Could not fetch pool data for {mint}. Cannot perform direct swap.")
-            return False
-        # ... existing code ...
+        buy_price = float(self.safe_float(token.get('buy_price_usd')) or 0.0)
+        sell_amt_usd = float(self.safe_float(token.get('amount_left_usd')) or 0.0)
+        pnl = sell_amt_usd and (cur_price - buy_price) * (sell_amt_usd / buy_price) if buy_price else 0
+        trade = {
+            'address': mint,
+            'buy_price_usd': buy_price,
+            'sell_price_usd': cur_price,
+            'amount_usd': sell_amt_usd,
+            'buy_time': token.get('bought_at'),
+            'sell_time': now,
+            'pnl': pnl,
+            'name': name,
+            'symbol': symbol,
+            'reason': 'MANUAL',
+            'fraction': 1.0,
+            'sold': True,
+        }
+        if mint in self.tokens:
+            self.tokens.pop(mint)
+        self.trades.append(trade)
+        self.log(f"[DEBUG] Closed trades count: {len(self.trades)}")
+        self.update_open_positions_file()
+        return True
+
+    def update_open_positions_file(self):
+        """Save all open (unsold) positions to open_positions.json."""
+        open_positions = [t for t in self.tokens.values() if not t.get('sold', False)]
+        try:
+            with open(self.open_positions_file, 'w', encoding='utf-8') as f:
+                json.dump(open_positions, f, indent=2)
+        except Exception as e:
+            self.log(f"[ERROR] Failed to update open positions file: {e}")
+
+    def load_open_positions(self):
+        """Load open positions from open_positions.json."""
+        try:
+            if os.path.exists(self.open_positions_file):
+                with open(self.open_positions_file, 'r', encoding='utf-8') as f:
+                    positions = json.load(f)
+                    for pos in positions:
+                        if 'address' in pos and not pos.get('sold', False):
+                            self.tokens[pos['address']] = pos
+        except Exception as e:
+            self.log(f"[ERROR] Failed to load open positions: {e}")
 
 def has_required_socials(token):
     socials = token.get('socials', {})
