@@ -10,8 +10,7 @@ import uuid
 from collections import deque
 from PIL import Image
 
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+MAX_LOG_LINES = 5000
 
 SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com"
 SETTINGS_FILE = "settings.json"
@@ -258,15 +257,7 @@ class DashboardFrame(ctk.CTkFrame):
         self.after(2000, self.refresh_summary)
 
     def refresh_trades(self):
-        open_trades = [t for t in getattr(self.master.session, 'tokens', {}).values() if not t.get('sold', False)]
-        for trade in open_trades:
-            pnl = None
-            buy_price = trade.get('buy_price_usd')
-            cur_price = trade.get('price_usd')
-            if buy_price and cur_price:
-                pnl = (cur_price - buy_price) / buy_price * 100
-            # Display trade info, PnL, and a Sell button
-            # ctk.CTkButton(..., command=lambda addr=trade['address']: self.master.manual_sell(addr))
+        open_trades, closed_trades = self.get_trades()
         # Clear previous widgets
         for widget in self.open_scroll.winfo_children():
             widget.destroy()
@@ -293,8 +284,6 @@ class DashboardFrame(ctk.CTkFrame):
         else:
             ctk.CTkLabel(self.open_scroll, text="No open trades.", font=FONT_BODY, text_color=TURBO_GRAY).pack(pady=SPACING_MD, padx=SPACING_MD)
         # Modern card for each closed trade
-        if 'closed_trades' not in locals():
-            closed_trades = []
         if closed_trades:
             for trade in closed_trades:
                 card = ctk.CTkFrame(self.closed_scroll, fg_color=TURBO_BLACK, corner_radius=CARD_RADIUS)
@@ -320,36 +309,73 @@ class DashboardFrame(ctk.CTkFrame):
 class LogFrame(ctk.CTkFrame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
+        self.master = master
         self.configure(fg_color=TURBO_BLACK)
         self.panel = ctk.CTkFrame(self, fg_color=TURBO_NAVY, corner_radius=CARD_RADIUS)
         self.panel.pack(expand=True, fill="both", pady=SPACING_LG, padx=SPACING_XL, ipadx=SPACING_MD, ipady=SPACING_MD)
         self.panel.pack_propagate(False)
-        self.textbox = ctk.CTkTextbox(self.panel, wrap="word", font=("Consolas", 12), fg_color=TURBO_DARK_GRAY, text_color=TURBO_CYAN)
-        self.textbox.pack(fill="both", expand=True, padx=SPACING_MD, pady=SPACING_MD, ipadx=SPACING_MD, ipady=SPACING_MD)
-        self.textbox.configure(state="disabled")
-        clear_btn = ctk.CTkButton(self.panel, text="Clear Log", command=self.clear_log, **button_kwargs)
-        clear_btn.pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
-        # Buffered log queue
+        # 2x2 grid for logs
+        self.sections = [
+            ("System Logs", self.filter_system_logs, TURBO_CYAN),
+            ("Error Logs", self.filter_error_logs, TURBO_ERROR),
+            ("Trade Logs", self.filter_trade_logs, TURBO_PURPLE),
+            ("Debug Logs", self.filter_debug_logs, TURBO_GRAY),
+        ]
+        self.textboxes = []
+        for i, (label, _, color) in enumerate(self.sections):
+            frame = ctk.CTkFrame(self.panel, fg_color=TURBO_DARK_GRAY, corner_radius=CARD_RADIUS)
+            frame.grid(row=i//2, column=i%2, sticky="nsew", padx=SPACING_MD, pady=SPACING_MD)
+            ctk.CTkLabel(frame, text=label, font=FONT_SUBHEADER, text_color=color).pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, 0))
+            textbox = ctk.CTkTextbox(frame, wrap="word", font=("Consolas", 12), fg_color=TURBO_DARK_GRAY, text_color=color, height=10)
+            textbox.pack(fill="both", expand=True, padx=SPACING_MD, pady=SPACING_MD, ipadx=SPACING_MD, ipady=SPACING_MD)
+            textbox.configure(state="disabled")
+            self.textboxes.append(textbox)
+            copy_btn = ctk.CTkButton(frame, text="Copy", command=lambda tb=textbox: self.copy_log(tb), fg_color=TURBO_CYAN, text_color=TURBO_BLACK, width=60)
+            copy_btn.pack(anchor="e", padx=SPACING_MD, pady=(0, SPACING_SM))
+        self.panel.grid_rowconfigure((0,1), weight=1)
+        self.panel.grid_columnconfigure((0,1), weight=1)
         self._queue = deque()
-        self.after(100, self._flush)
+        self.after(200, self._flush)
+
+    def filter_system_logs(self, lines):
+        return [l for l in lines if ("INFO" in l or "Started" in l or "Stopped" in l or (not any(x in l for x in ["ERROR","FAIL","EXCEPTION","DEBUG","BUY","SELL","TRADE","PnL"])))]
+    def filter_error_logs(self, lines):
+        return [l for l in lines if any(x in l for x in ["ERROR","FAIL","EXCEPTION","Traceback"])]
+    def filter_trade_logs(self, lines):
+        return [l for l in lines if any(x in l for x in ["BUY","SELL","TRADE","PnL","Manual buy","Manual sell"])]
+    def filter_debug_logs(self, lines):
+        return [l for l in lines if "DEBUG" in l]
 
     def append_log(self, line):
-        # push to queue, flush on timer
         self._queue.append(line)
 
     def _flush(self):
         if self._queue:
-            self.textbox.configure(state="normal")
-            while self._queue:
-                self.textbox.insert("end", self._queue.popleft() + "\n")
-            self.textbox.see("end")
-            self.textbox.configure(state="disabled")
-        self.after(100, self._flush)
+            self.master.log_lines.extend(self._queue)
+            self._queue.clear()
+        # Update all textboxes
+        lines = self.master.log_lines[-MAX_LOG_LINES:] if hasattr(self.master, 'log_lines') else []
+        for i, (_, filter_fn, color) in enumerate(self.sections):
+            tb = self.textboxes[i]
+            tb.configure(state="normal")
+            tb.delete("1.0", "end")
+            filtered = filter_fn(lines)
+            for l in filtered:
+                tb.insert("end", l + "\n")
+            tb.see("end")
+            tb.configure(state="disabled")
+        self.after(200, self._flush)
+
+    def copy_log(self, textbox):
+        self.clipboard_clear()
+        self.clipboard_append(textbox.get("1.0", "end").strip())
 
     def clear_log(self):
-        self.textbox.configure(state="normal")
-        self.textbox.delete("1.0", "end")
-        self.textbox.configure(state="disabled")
+        self.master.log_lines.clear()
+        for tb in self.textboxes:
+            tb.configure(state="normal")
+            tb.delete("1.0", "end")
+            tb.configure(state="disabled")
 
 class PlaceholderFrame(ctk.CTkFrame):
     def __init__(self, master, text, *args, **kwargs):
@@ -969,6 +995,8 @@ class MainApp(ctk.CTk):
         if self.session and hasattr(self.session, 'manual_sell_token'):
             self.session.manual_sell_token(address)
             self.log_callback(f"Manual sell triggered for token: {address}")
+            if "Dashboard" in self.frames:
+                self.frames["Dashboard"].refresh_trades()
 
     def fetch_token_info(self, address):
         if self.session and hasattr(self.session, 'fetch_dexscreener_pool'):
