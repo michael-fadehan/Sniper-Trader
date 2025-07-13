@@ -670,6 +670,15 @@ class SniperSession:
         # Stub for linter, should be implemented in subclass or main bot
         return False
 
+    def update_open_positions_file(self):
+        """Save all open (unsold) positions to open_positions.json."""
+        open_positions = [t for t in self.tokens.values() if not t.get('sold', False)]
+        try:
+            with open(self.open_positions_file, 'w', encoding='utf-8') as f:
+                json.dump(open_positions, f, indent=2)
+        except Exception as e:
+            self.log(f"[ERROR] Failed to update open positions file: {e}")
+
 # --- BUY/SELL LOGIC FROM sniper_sim.py ---
 
 def execute_buy(self, token_address, amount_sol):
