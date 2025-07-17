@@ -450,13 +450,6 @@ class SniperSession:
         print(f"Starting Balance: {self.sol_balance:.4f} SOL (${self.initial_balance_usd:.2f} USD)")
         print(f"SOL Price: ${self.sol_usd:.2f}")
         
-        if self.initial_balance_usd < self.POSITION_SIZE_USD:
-            print(f"❌ Insufficient balance for trading! Need minimum ${self.POSITION_SIZE_USD:.2f}, have ${self.initial_balance_usd:.2f}")
-            return
-            
-        print(f"Session Duration: {self.SIMULATION_DURATION/60:.1f} minutes")
-        print("="*self.TERMINAL_WIDTH)
-        
         # Setup session timing
         self.start_time = time.time()
         self.session_end_time = self.start_time + self.SIMULATION_DURATION
