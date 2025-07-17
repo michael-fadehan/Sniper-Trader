@@ -585,6 +585,14 @@ class SniperSession:
 
     def stop(self):
         self.stop_threads = True
+        self.log("[INFO] Stopping bot and cleaning up...")
+        # Cancel all pending asyncio tasks before closing the loop
+        if hasattr(self, 'loop') and self.loop and self.loop.is_running():
+            import asyncio
+            tasks = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+            for task in tasks:
+                task.cancel()
+            self.loop.call_soon_threadsafe(self.loop.stop)
         self.update_status("Stopped")
 
         # Cancel websocket task if it exists and loop is running
@@ -631,10 +639,6 @@ class SniperSession:
         self.log(f"\nWallet Address: {self.wallet_address}")
         self.log(f"Starting Balance: {self.sol_balance:.4f} SOL (${self.initial_balance_usd:.2f} USD)")
         self.log(f"SOL Price: ${self.sol_usd:.2f}")
-        if self.initial_balance_usd < self.POSITION_SIZE_USD:
-            self.log(f"❌ Insufficient balance for trading! Need minimum ${self.POSITION_SIZE_USD:.2f}, have ${self.initial_balance_usd:.2f}")
-            self.update_status("Error")
-            return
         self.log(f"Session Duration: {self.SIMULATION_DURATION/60:.1f} minutes")
         self.log("="*self.TERMINAL_WIDTH)
         self.start_time = time.time()
