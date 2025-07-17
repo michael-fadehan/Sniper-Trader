@@ -1,0 +1,74 @@
+Turbo User Manual (v1.1.0.0)
+============================
+
+Welcome to Turbo!
+
+Turbo is a trading assistant app designed to help you trade tokens on Solana with ease. This manual will guide you through installation, setup, and using all the main features. Please read carefully for the best experience.
+
+----------------------------
+1. Getting Started
+----------------------------
+
+- Turbo is a Windows application. You can run it by double-clicking Turbo.exe after installation.
+- Make sure you have an internet connection for real-time data.
+
+----------------------------
+2. Main Features
+----------------------------
+
+- **Simulation Mode**: Practice trading with virtual funds. No real money is used.
+- **Real Wallet Mode**: Trade using your real Solana wallet. Make sure to keep your private key or seed phrase safe!
+- **Wallet Settings**: Choose between Private Key or Seed Phrase. Enter your wallet details securely.
+- **Trading Settings**:
+  - Take Profit: Set the percentage gain to automatically sell a token.
+  - Stop Loss: Set the percentage loss to automatically sell and prevent further loss.
+  - Position Size (USD): Set how much USD to use for each trade.
+  - Min Liquidity, Min Volume, Max Price, and more: Fine-tune which tokens are considered for trading.
+- **Risk Management**: Enable or disable features like blocking risky wallets, requiring social links, and more.
+- **Tooltips**: Hover over any setting for a simple explanation.
+
+----------------------------
+3. How to Use Turbo
+----------------------------
+
+1. **Open Turbo.exe**
+2. **Choose Mode**: Select Simulation or Real Wallet from the dropdown at the top.
+3. **Enter Wallet Details** (Real Wallet mode only):
+   - Select Private Key or Seed Phrase.
+   - Enter your key or phrase in the field provided.
+4. **Adjust Trading Settings**:
+   - Set your Take Profit, Stop Loss, Position Size, and other filters.
+5. **Adjust Risk Management**:
+   - Enable or disable risk features as needed.
+6. **Save Settings**: Click the Save button to apply your changes.
+7. **Start Trading**: Click the Start button. The bot will begin monitoring and trading tokens based on your settings.
+8. **Monitor Status**: Watch the logs and dashboard for updates on trades, profits, and errors.
+9. **Stop Trading**: Click the Stop button to end the session.
+
+----------------------------
+4. Tips & Safety
+----------------------------
+
+- Always double-check your wallet details before starting in Real Wallet mode.
+- Use Simulation mode to practice and test your settings.
+- Never share your private key or seed phrase with anyone.
+- If you see errors about balance or trading, check your wallet and settings.
+- For best results, keep your app and system up to date.
+
+----------------------------
+5. Troubleshooting
+----------------------------
+
+- **App won’t start**: Make sure all files are present and you have the correct version of Windows.
+- **Wallet errors**: Double-check your wallet details and internet connection.
+- **Trading errors**: Review your trading and risk settings. Try Simulation mode first.
+- **Still stuck?**: Contact support or check the README for more help.
+
+----------------------------
+6. About
+----------------------------
+
+Turbo v1.1.0.0
+For Solana token trading
+
+Thank you for using Turbo! Trade smart and stay safe. 
