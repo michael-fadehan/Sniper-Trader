@@ -22,7 +22,7 @@ amount_lamports = int(amount_sol * 1e9)
 slippage_bps = 50  # 0.5%
 
 # --- USER: FILL IN YOUR PRIVATE KEY HERE (base58 string or array) ---
-PRIVATE_KEY = "Gi5mMxQJvT28K5eZ1Z6Pic88V1CRD3YotRqTpJyaBSGFZ1vUhicTLKnJwJP7JoY6W1syJK7zyN2vDAFRfCcHh7x"  # e.g. "[1,2,3,...]" or base58 string
+PRIVATE_KEY = ""  # e.g. "[1,2,3,...]" or base58 string
 
 if PRIVATE_KEY.startswith("["):
     import json
