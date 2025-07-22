@@ -194,6 +194,8 @@ async def execute_buy_token(self, token_mint_address: str, amount_to_spend_sol: 
             self.log(f"Signature: {signature}")
             if signature:
                 self.log("✅ Jupiter swap transaction confirmed.")
+                if sys.platform == 'win32':
+                    winsound.MessageBeep()
                 return True
             else:
                 self.log(f"❌ Jupiter swap failed: Transaction not confirmed")
@@ -303,6 +305,8 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
             self.log(f"Signature: {signature}")
             if signature:
                 self.log("✅ Jupiter swap transaction confirmed (SELL).")
+                if sys.platform == 'win32':
+                    winsound.MessageBeep()
                 return True
             else:
                 self.log(f"❌ Jupiter swap failed: Transaction not confirmed (SELL)")
