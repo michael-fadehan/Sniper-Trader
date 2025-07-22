@@ -1,6 +1,6 @@
 [Setup]
 AppName=Turbo Sniper Trader
-AppVersion=1.1.0
+AppVersion=1.1.1
 DefaultDirName={pf}\TurboSniperTrader
 DefaultGroupName=Turbo Sniper Trader
 OutputDir=.
