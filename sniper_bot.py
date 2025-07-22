@@ -200,12 +200,11 @@ class SniperSession:
         self.SIMULATION_MODE = kwargs.get("simulation", SIMULATION_MODE)
         self.RPC_URL = kwargs.get("rpc_url", RPC_LIST[0])
         self.STARTING_USD = STARTING_USD
-        self.SIMULATION_DURATION = kwargs.get("duration", SIMULATION_DURATION)
-        if self.SIMULATION_DURATION < 100000:
-            self.SIMULATION_DURATION = self.SIMULATION_DURATION * 60
+        duration_minutes = kwargs.get("duration", SIMULATION_DURATION // 60)
+        self.SIMULATION_DURATION = int(duration_minutes) * 60  # Always store as seconds
         self.BUY_FEE = BUY_FEE
         self.SELL_FEE = SELL_FEE
-        self.POSITION_SIZE_USD = kwargs.get("position_size", POSITION_SIZE_USD)
+        self.POSITION_SIZE_USD = kwargs.get("position_size", kwargs.get("position_size_usd", POSITION_SIZE_USD))
         self.TAKE_PROFIT_PCT = kwargs.get("take_profit", 30)
         self.STOP_LOSS_PCT = kwargs.get("stop_loss", 15)
         self.TAKE_PROFIT_MULT = 1 + (self.TAKE_PROFIT_PCT / 100)
@@ -1637,6 +1636,7 @@ class SniperSession:
         buy_price = float(self.safe_float(token.get('buy_price_usd')) or 0.0)
         sell_amt_usd = float(self.safe_float(token.get('amount_left_usd')) or 0.0)
         pnl = sell_amt_usd and (cur_price - buy_price) * (sell_amt_usd / buy_price) if buy_price else 0
+        self.log(f"[DEBUG TRADE] Closing trade: {name} ({symbol}) | Buy: ${buy_price:.8f} | Sell: ${cur_price:.8f} | Amount: ${sell_amt_usd:.4f} | PnL: ${pnl:.4f} | PnL%: {((cur_price - buy_price) / buy_price * 100) if buy_price else 0:+.2f}%")
         trade = {
             'address': mint,
             'buy_price_usd': buy_price,
