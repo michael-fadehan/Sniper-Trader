@@ -42,7 +42,7 @@ def get_settings_path():
 SETTINGS_FILE = get_settings_path()
 
 APP_NAME = "Turbo"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 COMPANY = "Turbo"
 SUPPORT_EMAIL = "support@turbo.com"
 WEBSITE = "https://turbo.com" 
@@ -329,8 +329,8 @@ class DashboardFrame(ctk.CTkFrame):
                 sell_price = trade.get('sell_price_usd', 0)
                 amount_usd = trade.get('amount_usd', 0)
                 pnl_usd = trade.get('pnl', 0)
-                # Correct percent calculation: percent of invested amount
-                pnl_pct = (pnl_usd / amount_usd * 100) if amount_usd else 0
+                # Correct percent calculation: percent of invested amount, but also show price-based PnL percent
+                pnl_pct = ((sell_price - buy_price) / buy_price * 100) if buy_price else 0
                 ctk.CTkLabel(card, text=f"{name} ({symbol})", font=FONT_SUBHEADER, text_color=TURBO_PURPLE, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
                 ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Sell: ${sell_price:.6f}", font=FONT_BODY, text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=SPACING_MD)
                 ctk.CTkLabel(card, text=f"PnL: {pnl_usd:+.4f} USD ({pnl_pct:+.2f}%)", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl_usd >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
