@@ -9,11 +9,37 @@ import requests
 import uuid
 from collections import deque
 from PIL import Image
+import tkinter.messagebox as messagebox
+import webbrowser
+import sys
 
 MAX_LOG_LINES = 5000
 
 SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com"
-SETTINGS_FILE = "settings.json"
+
+# Utility to get resource path for PyInstaller and dev
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# Utility to get user-writable settings path
+
+def get_settings_path():
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+        settings_dir = os.path.join(appdata, "TurboSniperTrader")
+    elif sys.platform == "darwin":
+        settings_dir = os.path.expanduser("~/Library/Application Support/TurboSniperTrader")
+    else:
+        settings_dir = os.path.expanduser("~/.config/TurboSniperTrader")
+    os.makedirs(settings_dir, exist_ok=True)
+    return os.path.join(settings_dir, "settings.json")
+
+SETTINGS_FILE = get_settings_path()
 
 APP_NAME = "Turbo"
 APP_VERSION = "1.1.0"
@@ -111,7 +137,7 @@ class Sidebar(ctk.CTkFrame):
         # Logo
         try:
             from PIL import Image
-            logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+            logo_path = resource_path("logo.png")
             if os.path.exists(logo_path):
                 img = Image.open(logo_path).convert("RGBA").resize((120, 120))
                 self.logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(120, 120))
@@ -272,11 +298,20 @@ class DashboardFrame(ctk.CTkFrame):
                 symbol = trade.get('symbol', 'N/A')
                 buy_price = trade.get('buy_price_usd', 0)
                 cur_price = trade.get('price_usd', 0)
-                pnl = ((cur_price - buy_price) / buy_price * 100) if buy_price else 0
+                amount_usd = trade.get('amount_left_usd', 0)
+                sell_fee = getattr(self.master.session, 'SELL_FEE', 0.005) if hasattr(self.master, 'session') else 0.005
+                if buy_price and cur_price and amount_usd:
+                    tokens_amount = amount_usd / buy_price
+                    current_value = tokens_amount * cur_price * (1 - sell_fee)
+                    pnl_usd = current_value - amount_usd
+                    pnl_pct = (pnl_usd / amount_usd * 100) if amount_usd else 0
+                else:
+                    pnl_usd = 0
+                    pnl_pct = 0
                 status = "HOLDING" if not trade.get('sold') else "SOLD"
                 ctk.CTkLabel(card, text=f"{name} ({symbol})", font=FONT_SUBHEADER, text_color=TURBO_CYAN, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
                 ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Cur: ${cur_price:.6f}", font=FONT_BODY, text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=SPACING_MD)
-                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"PnL: {pnl_usd:+.4f} USD ({pnl_pct:+.2f}%)", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl_usd >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
                 ctk.CTkLabel(card, text=f"Status: {status}", font=FONT_BODY, text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
                 # Sell button
                 sell_btn = ctk.CTkButton(card, text="Sell", fg_color=TURBO_ERROR, hover_color=TURBO_PURPLE, text_color=TURBO_WHITE, width=BTN_WIDTH, height=BTN_HEIGHT, corner_radius=BTN_RADIUS, font=FONT_BODY, command=lambda addr=trade.get('address'): self.master.manual_sell(addr))
@@ -292,10 +327,13 @@ class DashboardFrame(ctk.CTkFrame):
                 symbol = trade.get('symbol', 'N/A')
                 buy_price = trade.get('buy_price_usd', 0)
                 sell_price = trade.get('sell_price_usd', 0)
-                pnl = ((sell_price - buy_price) / buy_price * 100) if buy_price else 0
+                amount_usd = trade.get('amount_usd', 0)
+                pnl_usd = trade.get('pnl', 0)
+                # Correct percent calculation: percent of invested amount
+                pnl_pct = (pnl_usd / amount_usd * 100) if amount_usd else 0
                 ctk.CTkLabel(card, text=f"{name} ({symbol})", font=FONT_SUBHEADER, text_color=TURBO_PURPLE, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
                 ctk.CTkLabel(card, text=f"Buy: ${buy_price:.6f} | Sell: ${sell_price:.6f}", font=FONT_BODY, text_color=TURBO_WHITE, anchor="w").pack(anchor="w", padx=SPACING_MD)
-                ctk.CTkLabel(card, text=f"PnL: {pnl:+.2f}%", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
+                ctk.CTkLabel(card, text=f"PnL: {pnl_usd:+.4f} USD ({pnl_pct:+.2f}%)", font=FONT_STAT, text_color=TURBO_SUCCESS if pnl_usd >= 0 else TURBO_ERROR, anchor="w").pack(anchor="w", padx=SPACING_MD)
                 ctk.CTkLabel(card, text=f"Status: SOLD", font=FONT_BODY, text_color=TURBO_GRAY, anchor="w").pack(anchor="w", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
         else:
             ctk.CTkLabel(self.closed_scroll, text="No closed trades.", font=FONT_BODY, text_color=TURBO_GRAY).pack(pady=SPACING_MD, padx=SPACING_MD)
@@ -425,7 +463,7 @@ class SettingsFrame(ctk.CTkFrame):
             "Max Pair Age (s)": "Maximum age of the trading pair in seconds that will be considered",
             "Min Buys 5m": "Minimum number of buy transactions in the last 5 minutes",
             "Min Trx Ratio": "Minimum ratio of buy to sell transactions required",
-            "Duration (s)": "How long to hold a position before considering selling",
+            "Duration (min)": "How many minutes to hold a position before considering selling",
             "Position Size (USD)": "Amount in USD to use for each trade.",
             "Min Percent Burned": "Minimum percentage of total supply that must be burned",
             "Require Immutable": "Only trade tokens with locked/renounced ownership",
@@ -533,7 +571,7 @@ class SettingsFrame(ctk.CTkFrame):
         self.max_pair_age_var = ctk.DoubleVar(value=86400.0)
         self.min_buys_5m_var = ctk.IntVar(value=10)
         self.min_trx_ratio_var = ctk.DoubleVar(value=1.5)
-        self.duration_var = ctk.IntVar(value=60)
+        self.duration_var = ctk.IntVar(value=1)  # Default 1 minute
         self.position_size_var = ctk.DoubleVar(value=20.0)
         self.trading_vars = {
             "Min Liquidity (USD)": self.min_liquidity_var,
@@ -543,7 +581,7 @@ class SettingsFrame(ctk.CTkFrame):
             "Max Pair Age (s)": self.max_pair_age_var,
             "Min Buys 5m": self.min_buys_5m_var,
             "Min Trx Ratio": self.min_trx_ratio_var,
-            "Duration (s)": self.duration_var,
+            "Duration (min)": self.duration_var,
             "Position Size (USD)": self.position_size_var,
         }
         for i, (label, var) in enumerate(self.trading_vars.items()):
@@ -630,17 +668,18 @@ class SettingsFrame(ctk.CTkFrame):
             **{key.lower().replace(" ", "_").replace("(", "").replace(")", ""): var.get() 
                for key, var in self.trading_vars.items()},
             **{key.lower().replace(" ", "_"): var.get() 
-               for key, (var, _) in self.risk_vars.items()}
+               for key, (var, _) in self.risk_vars.items()},
+            "position_size": self.position_size_var.get(),
         }
-        with open("settings.json", "w") as f:
+        with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
         self.on_settings_apply(settings)
 
     def load_settings(self):
-        if not os.path.exists("settings.json"):
+        if not os.path.exists(SETTINGS_FILE):
             return
         try:
-            with open("settings.json", "r") as f:
+            with open(SETTINGS_FILE, "r") as f:
                 settings = json.load(f)
             # Always set dropdown to 'Simulation' or 'Real Wallet'
             mode_val = settings.get("mode", "Simulation")
@@ -660,6 +699,8 @@ class SettingsFrame(ctk.CTkFrame):
                 setting_key = key.lower().replace(" ", "_")
                 if setting_key in settings:
                     var.set(settings[setting_key])
+            self.position_size_var.set(settings.get("position_size", 20.0))
+            self.duration_var.set(settings.get("duration", 1))  # Load as minutes
         except Exception as e:
             print(f"Error loading settings: {e}")
 
@@ -733,6 +774,11 @@ class LicenseFrame(ctk.CTkFrame):
         if key:
             self.entry.delete(0, "end")
             self.entry.insert(0, key)
+        # Show verified message if already licensed
+        if getattr(master, 'license_verified', False):
+            self.status_label.configure(text=master.license_status_msg, text_color=TURBO_SUCCESS)
+            self.entry.configure(state="disabled")
+            self.activate_btn.configure(state="disabled")
 
     def _activate(self):
         key = self.entry.get().strip()
@@ -753,7 +799,7 @@ class AboutFrame(ctk.CTkFrame):
         self.panel.pack_propagate(False)
         try:
             from PIL import Image
-            logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+            logo_path = resource_path("logo.png")
             if os.path.exists(logo_path):
                 img = Image.open(logo_path).convert("RGBA").resize((80, 80))
                 self.logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(80, 80))
@@ -772,6 +818,8 @@ class AboutFrame(ctk.CTkFrame):
         ctk.CTkLabel(self.panel, text=f"Website: {WEBSITE}", **label_kwargs_blue).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
         ctk.CTkLabel(self.panel, text=f"Telegram: {TELEGRAM}", **label_kwargs).pack(pady=(SPACING_SM, SPACING_MD), padx=SPACING_MD)
         ctk.CTkLabel(self.panel, text="\u00A9 2024 Turbo. All rights reserved.", **label_kwargs).pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
+        # Add Check for Updates button
+        ctk.CTkButton(self.panel, text="Check for Updates", command=lambda: check_for_update(APP_VERSION), corner_radius=BTN_RADIUS, font=FONT_BODY, fg_color=TURBO_CYAN, text_color=TURBO_BLACK).pack(pady=(SPACING_MD, SPACING_SM), padx=SPACING_MD)
 
 class ManualBuyFrame(ctk.CTkFrame):
     def __init__(self, master, fetch_token_info_callback, manual_buy_callback, *args, **kwargs):
@@ -917,6 +965,33 @@ def get_machine_id():
             json.dump(data, f, indent=2)
     return machine_id
 
+def fetch_version_file():
+    url = "https://raw.githubusercontent.com/michael-fadehan/Sniper-Trader/main/latest_version.txt"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.text
+    else:
+        print("Failed to fetch version file:", response.status_code, response.text)
+        return None
+
+def check_for_update(current_version):
+    content = fetch_version_file()
+    if content:
+        lines = content.strip().splitlines()
+        latest_version = lines[0].strip()
+        download_url = lines[1].strip() if len(lines) > 1 else None
+        if latest_version != current_version:
+            if messagebox.askyesno(
+                "Update Available",
+                f"A new version ({latest_version}) is available!\nDo you want to download it?"
+            ):
+                if download_url:
+                    webbrowser.open(download_url)
+        else:
+            messagebox.showinfo("No Update", "You are running the latest version.")
+    else:
+        messagebox.showerror("Update Check Failed", "Could not check for updates.")
+
 class MainApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -945,8 +1020,13 @@ class MainApp(ctk.CTk):
         # Add a vertical grey separator
         self.separator = ctk.CTkFrame(self, width=4, fg_color=TURBO_GRAY)
         self.separator.pack(side="left", fill="y")
-        # Show only the dashboard at first
-        self.show_section("Dashboard")
+        self.license_verified = False
+        self.license_status_msg = ""
+        self.check_license_on_startup()
+        if not self.license_verified:
+            self.show_section("License")
+        else:
+            self.show_section("Dashboard")
         self.bot_thread = None
         self.session = None
         self.bot_status = "Stopped"
@@ -957,20 +1037,21 @@ class MainApp(ctk.CTk):
         # Set window icon (favicon)
         try:
             from PIL import Image, ImageTk
-            if os.path.exists("logo.ico"):
-                img = Image.open("logo.ico")
+            if os.path.exists(resource_path("logo.ico")):
+                img = Image.open(resource_path("logo.ico"))
                 icon = ImageTk.PhotoImage(img)
                 self.wm_iconphoto(True, icon)
                 # Ensure taskbar icon is set on Windows
                 if os.name == "nt":
-                    self.iconbitmap("logo.ico")
-            elif os.path.exists("logo.png"):
-                img = Image.open("logo.png").resize((32, 32))
+                    self.iconbitmap(resource_path("logo.ico"))
+            elif os.path.exists(resource_path("logo.png")):
+                img = Image.open(resource_path("logo.png")).resize((32, 32))
                 icon = ImageTk.PhotoImage(img)
                 self.wm_iconphoto(True, icon)
         except Exception:
             pass  # If PIL or logo not available, skip icon
         # For Windows packaging: use logo.ico for best results with PyInstaller
+        self.protocol("WM_DELETE_WINDOW", self.on_app_close)
 
     def show_section(self, section):
         for name, frame in self.frames.items():
@@ -1022,6 +1103,12 @@ class MainApp(ctk.CTk):
         if "position_size" in settings:
             try:
                 settings["position_size"] = float(settings["position_size"])
+            except Exception:
+                pass  # Leave as is if conversion fails
+        # Map duration to backend (DURATION_MINUTES)
+        if "duration" in settings:
+            try:
+                settings["duration"] = int(settings["duration"])
             except Exception:
                 pass  # Leave as is if conversion fails
         self.session = SniperSession(
@@ -1104,7 +1191,9 @@ class MainApp(ctk.CTk):
             initial = getattr(self.session, 'initial_balance_usd', 0) or 0
             sol_balance = getattr(self.session, 'sol_balance', 0) or 0
             sol_usd = getattr(self.session, 'sol_usd', 0) or 0
-            current = sol_balance * sol_usd
+            # Use backend's PnL calculation
+            realized_pnl, unrealized_pnl, total_pnl = self.session.calculate_total_pnl() if hasattr(self.session, 'calculate_total_pnl') else (0, 0, 0)
+            current = initial + total_pnl
             trades = getattr(self.session, 'trades', [])
             total_trades = len(trades)
             if total_trades == 0:
@@ -1113,7 +1202,7 @@ class MainApp(ctk.CTk):
                 pnl_str = "$0.00 (+0.00%)"
                 win_rate = "0.0%"
             else:
-                pnl_usd = current - initial
+                pnl_usd = total_pnl
                 pnl_pct = (pnl_usd / initial * 100) if initial else 0
                 pnl_str = f"${pnl_usd:.2f} ({pnl_pct:+.2f}%)"
                 winning_trades = len([t for t in trades if t.get('pnl', 0) > 0])
@@ -1157,6 +1246,57 @@ class MainApp(ctk.CTk):
         if self.session and hasattr(self.session, 'manual_buy_token'):
             return self.session.manual_buy_token(token_info, force=True)
         return False, "Manual buy failed: session not running."
+
+    def check_license_on_startup(self):
+        key = self.load_license()
+        machine_id = getattr(self, "machine_id", None) or get_machine_id()
+        if key:
+            try:
+                response = requests.post(
+                    "https://turbo-license-server-2.onrender.com/validate",
+                    json={"key": key, "machine_id": machine_id},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    valid = response.json().get("valid", False)
+                    if valid:
+                        self.license_verified = True
+                        self.license_status_msg = "License verified for this device."
+                        self.license_key = key
+                    else:
+                        self.license_verified = False
+                        self.license_status_msg = response.json().get("message") or "Invalid or unauthorized license key."
+                else:
+                    self.license_verified = False
+                    self.license_status_msg = "License server error."
+            except Exception as e:
+                self.license_verified = False
+                self.license_status_msg = f"License validation error: {e}"
+        else:
+            self.license_verified = False
+            self.license_status_msg = "No license key entered."
+
+    def on_app_close(self):
+        open_trades = [t for t in getattr(self.session, 'tokens', {}).values() if not t.get('sold', False)] if self.session else []
+        if open_trades:
+            result = messagebox.askyesnocancel(
+                "Trades Ongoing",
+                "There are ongoing trades. Do you want to exit anyway?\nYes: Exit anyway\nNo: Cancel\nCancel: Close all trades then exit."
+            )
+            if result is None:
+                # Cancel: Close all trades then exit
+                if self.session and hasattr(self.session, 'manual_sell_token'):
+                    for t in open_trades:
+                        self.session.manual_sell_token(t['address'])
+                self.after(1000, self.destroy)  # Give time for sells
+            elif result:
+                # Yes: Exit anyway
+                self.destroy()
+            else:
+                # No: Cancel
+                return
+        else:
+            self.destroy()
 
 if __name__ == "__main__":
     app = MainApp()
