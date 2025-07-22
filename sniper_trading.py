@@ -338,7 +338,7 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
 class SniperSession:
     """Base class for sniper bot trading functionality"""
     
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         self.keypair: Optional[Keypair] = None
         self.client: Any = None  # RPC client
         self.seen_tokens: set = set()  # Use set for .add()
@@ -353,7 +353,7 @@ class SniperSession:
         # Add trading and session attributes to fix attribute errors
         self.TAKE_PROFIT_PCT = 30
         self.STOP_LOSS_PCT = 15
-        self.POSITION_SIZE_USD = 20.0
+        self.POSITION_SIZE_USD = kwargs.get("position_size", kwargs.get("position_size_usd", 20.0))
         self.BUY_FEE = 0.005
         self.sol_usd = 0.0
         import threading
