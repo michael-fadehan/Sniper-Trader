@@ -30,7 +30,7 @@ RPC_URL = "https://api.mainnet-beta.solana.com"  # Solana RPC URL
 
 # Trading Settings
 STARTING_USD = 100.0      # Starting balance for simulation mode
-POSITION_SIZE_USD = 2.0  # Amount to spend per trade
+POSITION_SIZE_USD = 2.0  # Amount to spend per trade (default, can be overridden)
 BUY_FEE = 0.005          # 0.5% fee per trade
 SELL_FEE = 0.005         # 0.5% fee per trade
 TAKE_PROFIT_MULT = 2.0   # Sell at 2x buy price
@@ -84,7 +84,7 @@ class SniperSession:
     LOG_FILE = "logs"
     LOG_BACKUP = "logs.old"
 
-    def __init__(self, seed_phrase: Optional[str] = None, private_key: Optional[str] = None):
+    def __init__(self, seed_phrase: Optional[str] = None, private_key: Optional[str] = None, position_size: Optional[float] = None):
         # Initialize locks
         self.lock = Lock()
         self.log_lock = Lock()
@@ -98,7 +98,7 @@ class SniperSession:
         self.SIMULATION_DURATION = SIMULATION_DURATION
         self.BUY_FEE = BUY_FEE
         self.SELL_FEE = SELL_FEE
-        self.POSITION_SIZE_USD = POSITION_SIZE_USD
+        self.POSITION_SIZE_USD = position_size if position_size is not None else POSITION_SIZE_USD
         self.TAKE_PROFIT_MULT = TAKE_PROFIT_MULT
         self.STOP_LOSS_PCT = STOP_LOSS_PCT
         self.MIN_LIQUIDITY_USD = MIN_LIQUIDITY_USD
