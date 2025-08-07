@@ -6,3 +6,6 @@ cd solders
 maturin develop
 pyinstaller --noconfirm --onefile --windowed 
 --icon=logo.ico --add-data "logo.png;." --add-data "logo.ico;." --add-data "Turbo User Manual (v1).pdf;." --add-data "Product Requirements Document.pdf;." --add-data "venv/Lib/site-packages/coincurve/libsecp256k1.dll;coincurve" sniper_gui.py
+cargo
+rust 
+perl
