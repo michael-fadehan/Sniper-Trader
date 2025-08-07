@@ -12,6 +12,12 @@ import re
 import sys
 import time
 import base58
+
+# Import winsound for Windows beep functionality
+try:
+    import winsound
+except ImportError:
+    winsound = None  # Not available on non-Windows systems
 from solana.rpc.commitment import Commitment
 from solders.message import Message, MessageV0
 from solders.commitment_config import CommitmentLevel
@@ -194,8 +200,11 @@ async def execute_buy_token(self, token_mint_address: str, amount_to_spend_sol: 
             self.log(f"Signature: {signature}")
             if signature:
                 self.log("✅ Jupiter swap transaction confirmed.")
-                if sys.platform == 'win32':
-                    winsound.MessageBeep()
+                try:
+                    if sys.platform == 'win32' and winsound:
+                        winsound.MessageBeep()
+                except Exception as beep_error:
+                    self.log(f"[DEBUG] Beep failed (non-critical): {beep_error}")
                 return True
             else:
                 self.log(f"❌ Jupiter swap failed: Transaction not confirmed")
@@ -305,8 +314,11 @@ async def execute_sell_token(self, token_mint_address: str, amount_tokens_to_sel
             self.log(f"Signature: {signature}")
             if signature:
                 self.log("✅ Jupiter swap transaction confirmed (SELL).")
-                if sys.platform == 'win32':
-                    winsound.MessageBeep()
+                try:
+                    if sys.platform == 'win32' and winsound:
+                        winsound.MessageBeep()
+                except Exception as beep_error:
+                    self.log(f"[DEBUG] Beep failed (non-critical): {beep_error}")
                 return True
             else:
                 self.log(f"❌ Jupiter swap failed: Transaction not confirmed (SELL)")
@@ -389,7 +401,7 @@ class SniperSession:
             # Add retry logic for confirmation
             for attempt in range(3):
                 try:
-                    conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                    conf = self.client.confirm_transaction(signature, commitment="COMMITMENT_CONFIRMED")
                     if conf and conf.value:
                         self.log(f"[DEBUG] Transaction confirmed on attempt {attempt + 1}")
                         return True
@@ -630,7 +642,9 @@ class SniperSession:
             gross_usd = actual_tokens_to_sell * cur_price
             fee = gross_usd * self.SELL_FEE
             net_usd = gross_usd - fee
-            pnl_usd = net_usd - sell_amt_usd
+            # Use correct PnL formula: (sell_price - buy_price) / buy_price * original_investment
+            amount_invested = self.safe_float(token.get('amount_invested_usd')) or sell_amt_usd
+            pnl_usd = (cur_price - buy_price) / buy_price * amount_invested if buy_price else 0
             sol_received = net_usd / self.sol_usd
             self.sol_balance += sol_received
             token['amount_left_usd'] = 0
@@ -642,7 +656,7 @@ class SniperSession:
                 'address': mint,
                 'buy_price_usd': buy_price,
                 'sell_price_usd': cur_price,
-                'amount_usd': sell_amt_usd,
+                'amount_usd': amount_invested,  # Use original investment amount
                 'buy_time': token['bought_at'],
                 'sell_time': now,
                 'pnl': pnl_usd,
@@ -1030,7 +1044,7 @@ async def _send_transaction_for_wallet_type(self, transaction, instruction=None)
             self.log("[DEBUG] Using Trojan wallet signing")
             if transaction is None and instruction is not None:
                 # Create a new transaction with the instruction
-                recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
+                recent_blockhash = self.client.get_latest_blockhash(commitment="COMMITMENT_CONFIRMED").value.blockhash
                 
                 # Create a versioned transaction
                 message = MessageV0.try_compile(
@@ -1049,7 +1063,7 @@ async def _send_transaction_for_wallet_type(self, transaction, instruction=None)
             self.log("[DEBUG] Using conventional wallet signing")
             if transaction is None and instruction is not None:
                 # Create a new transaction with the instruction
-                recent_blockhash = self.client.get_latest_blockhash(commitment="confirmed").value.blockhash
+                recent_blockhash = self.client.get_latest_blockhash(commitment="COMMITMENT_CONFIRMED").value.blockhash
                 
                 # Create a versioned transaction
                 message = MessageV0.try_compile(
@@ -1081,7 +1095,7 @@ async def _send_transaction_for_wallet_type(self, transaction, instruction=None)
         # Wait for confirmation
         for attempt in range(3):  # Try up to 3 times
             try:
-                conf = self.client.confirm_transaction(signature, commitment="confirmed")
+                conf = self.client.confirm_transaction(signature, commitment="COMMITMENT_CONFIRMED")
                 if conf and conf.value:
                     self.log(f"[DEBUG] Transaction confirmed on attempt {attempt + 1}")
                     return True
