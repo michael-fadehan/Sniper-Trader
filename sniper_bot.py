@@ -200,7 +200,7 @@ class SniperSession:
         self.SIMULATION_MODE = kwargs.get("simulation", SIMULATION_MODE)
         self.RPC_URL = kwargs.get("rpc_url", RPC_LIST[0])
         self.STARTING_USD = STARTING_USD
-        duration_minutes = kwargs.get("duration", SIMULATION_DURATION // 60)
+        duration_minutes = kwargs.get("duration", 120)  # Default 120 minutes
         self.SIMULATION_DURATION = int(duration_minutes) * 60  # Always store as seconds
         self.BUY_FEE = BUY_FEE
         self.SELL_FEE = SELL_FEE
@@ -399,6 +399,7 @@ class SniperSession:
                         'bought_at': now,
                         'amount_usd': net_amt,
                         'amount_left_usd': net_amt,
+                        'amount_invested_usd': net_amt,  # <-- Add this line
                         'buy_price_usd': buy_price,
                         'sold': False,
                         'sell_price_usd': None,
@@ -552,6 +553,7 @@ class SniperSession:
                     'bought_at': now,
                     'amount_usd': net_amt,
                     'amount_left_usd': net_amt,
+                    'amount_invested_usd': net_amt,  # <-- Add this line
                     'buy_price_usd': buy_price,
                     'sold': False,
                     'sell_price_usd': None,
@@ -1366,11 +1368,30 @@ class SniperSession:
 
     def manual_buy_token(self, token_info, force=True):
         now = time.time()
-        result, message = self.simulate_buy(token_info, now, from_watchlist=False, force=force)
-        if result:
-            return True, f"Manual buy SUCCESS for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
+        if getattr(self, "SIMULATION_MODE", False):
+            # Simulation logic (unchanged)
+            result, message = self.simulate_buy(token_info, now, from_watchlist=False, force=force)
+            if result:
+                return True, f"Manual buy SUCCESS for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
+            else:
+                return False, message or f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
         else:
-            return False, message or f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nWarning: Manual buy ignores all filters and settings. Proceed with caution!"
+            # Real wallet logic
+            mint = token_info.get('mint') or token_info.get('address') or token_info.get('tokenAddress')
+            pool_data = self.fetch_dexscreener_pool(mint)
+            if not pool_data:
+                return False, f"[ERROR] Buy: Could not fetch pool data for {mint}. Cannot perform direct swap."
+            # Calculate amount to spend in SOL (use your existing logic for position size)
+            sol_amount = self.POSITION_SIZE_USD / self.sol_usd
+            try:
+                import asyncio
+                result = asyncio.run(self.execute_buy_token(mint, sol_amount, pool_data))
+                if result:
+                    return True, f"Manual buy SUCCESS for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nTrade confirmed on-chain."
+                else:
+                    return False, f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nTransaction failed or not confirmed."
+            except Exception as e:
+                return False, f"Manual buy FAILED for token: {token_info.get('name', 'N/A')} ({token_info.get('symbol', 'N/A')})\nError: {e}"
 
     def _get_websocket_url(self, http_url: str) -> str:
         """Converts an HTTP RPC URL to a WebSocket URL."""
@@ -1632,25 +1653,61 @@ class SniperSession:
         mint = token['address']
         name = token['name']
         symbol = token['symbol']
+        # Use the last known price for selling
         cur_price = float(self.safe_float(token.get('price_usd')) or 0.0)
         buy_price = float(self.safe_float(token.get('buy_price_usd')) or 0.0)
-        sell_amt_usd = float(self.safe_float(token.get('amount_left_usd')) or 0.0)
-        pnl = sell_amt_usd and (cur_price - buy_price) * (sell_amt_usd / buy_price) if buy_price else 0
-        self.log(f"[DEBUG TRADE] Closing trade: {name} ({symbol}) | Buy: ${buy_price:.8f} | Sell: ${cur_price:.8f} | Amount: ${sell_amt_usd:.4f} | PnL: ${pnl:.4f} | PnL%: {((cur_price - buy_price) / buy_price * 100) if buy_price else 0:+.2f}%")
+        
+        if cur_price == 0 or buy_price == 0:
+            self.log(f"[ERROR] Try sell: No price data for token: {name} ({symbol})")
+            return False
+            
+        # Use the original invested amount at buy time
+        amount_invested = float(self.safe_float(token.get('amount_invested_usd')) or self.safe_float(token.get('amount_left_usd')) or 0.0)
+        
+        # For manual sells, we need to execute the actual transaction
+        if force:  # Manual sell
+            # Calculate tokens to sell based on remaining USD amount
+            sell_amt_usd = self.safe_float(token.get('amount_left_usd'))
+            actual_tokens_to_sell = sell_amt_usd / cur_price if cur_price > 0 else 0
+            
+            if actual_tokens_to_sell <= 0:
+                self.log(f"❌ Sell failed: No tokens to sell for {name} ({symbol}).")
+                return False
+                
+            # Get pool data for the transaction
+            pool_data = self.fetch_dexscreener_pool(mint)
+            if not pool_data:
+                self.log(f"[ERROR] Sell: Could not fetch pool data for {mint}. Cannot perform transaction.")
+                return False
+                
+            # Execute the actual sell transaction
+            import asyncio
+            sell_success = asyncio.run(self.execute_sell_token(mint, actual_tokens_to_sell, pool_data))
+            
+            if not sell_success:
+                self.log(f"[ERROR] Sell transaction failed for {name} ({symbol})")
+                return False
+        
+        # Calculate PnL and record the trade
+        pnl = (cur_price - buy_price) / buy_price * amount_invested if buy_price else 0
+        self.log(f"[DEBUG TRADE] Closing trade: {name} ({symbol}) | Buy: ${buy_price:.8f} | Sell: ${cur_price:.8f} | Amount Invested: ${amount_invested:.4f} | PnL: ${pnl:.4f} | PnL%: {((cur_price - buy_price) / buy_price * 100) if buy_price else 0:+.2f}%")
+        
         trade = {
             'address': mint,
             'buy_price_usd': buy_price,
             'sell_price_usd': cur_price,
-            'amount_usd': sell_amt_usd,
+            'amount_usd': amount_invested,
             'buy_time': token.get('bought_at'),
             'sell_time': now,
             'pnl': pnl,
             'name': name,
             'symbol': symbol,
-            'reason': 'MANUAL',
+            'reason': 'MANUAL' if force else 'AUTO',
             'fraction': 1.0,
             'sold': True,
         }
+        
+        # Update token and add to trades
         if mint in self.tokens:
             self.tokens.pop(mint)
         self.trades.append(trade)
